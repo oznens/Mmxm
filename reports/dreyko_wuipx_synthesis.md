@@ -279,3 +279,50 @@ Tek bir cümleyle:
 
 Pipeline tam çalışıyor: CSV → text/chart analizi → trade extraction → rule-based
 detector → grid search → HTF filter → multi-asset backtest → overlap doğrulama.
+
+---
+
+## 10. Multi-strategy confluence (TurtleSoup ∩ FVG)
+
+**Hipotez:** "TurtleSoup + FVG retest aynı zamanda aynı yönde sinyal verirse
+A+ confluence" — Dreyko'nun en yüksek güven trade'lerinin pattern'i.
+
+Implementasyon: `strategies/combine.py` `combine_and()` — her iki strateji
+de ±4h içinde aynı (symbol, side) için sinyal vermeli.
+
+### BTC 1h, her birinin HTF filtreli ham karşılaştırması
+
+| Strateji | N | WR | Total R | PF | MDD | R/sig |
+|---|---|---|---|---|---|---|
+| TurtleSoup (HTF) | 122 | 48% | +105.5R | 2.69 | 6.1R | +0.86 |
+| FVG retest (HTF) | 296 | 17% | +5.6R | 1.02 | 56.7R | +0.02 |
+| **TS ∩ FVG combined** | **37** | **43%** | **+39.0R** | **2.86** | **7.0R** | **+1.05** |
+
+→ FVG tek başına neredeyse breakeven (PF 1.02), ama TS confluence FİLTRESİ olarak
+   kullanıldığında R/sig +%22 arttı (+0.86 → +1.05). **FVG bir trade signal değil,
+   bir confluence amplifier**.
+
+### Multi-asset doğrulama (combined)
+
+| Sembol | N | WR | Total R | PF | MDD | R/sig |
+|---|---|---|---|---|---|---|
+| BTC/USDT | 37 | 43% | +39.0R | **2.86** | 7.0R | +1.05 |
+| ETH/USDT | 49 | 33% | +14.4R | 1.44 | 10.0R | +0.29 |
+| XRP/USDT | 55 | 40% | +65.8R | **2.99** | 6.9R | +1.20 |
+| **Toplam** | **141** | **38%** | **+119.2R** | — | — | +0.85 |
+
+→ BTC ve XRP'de confluence güçlü (PF ~3.0), ETH'de zayıflıyor (PF 1.44).
+   Mesaj: **AND filtre evrensel değil — sembol-spesifik**. ETH'deki FVG
+   pattern kalitesi düşük, confluence ona değer katmıyor.
+
+### Sonuç tablosu — tüm stratejilerin nihai BTC 1h karşılaştırması
+
+| Strateji | N | WR | Total R | PF | MDD | R/sig |
+|---|---|---|---|---|---|---|
+| TurtleSoup default | 201 | 27% | +75.5R | 1.51 | 22.0R | +0.38 |
+| TurtleSoup optimal | 443 | 38% | +252.1R | 1.92 | 12.9R | +0.57 |
+| TurtleSoup opt + HTF | 122 | 48% | +105.5R | 2.69 | 6.1R | +0.86 |
+| **TS ∩ FVG + HTF** | **37** | **43%** | **+39.0R** | **2.86** | **7.0R** | **+1.05** |
+
+Sırasıyla iyileştirmeler: default → optimal: +%50 R/sig; +HTF: +%51 R/sig;
++FVG confluence: +%22 R/sig. **Her aşama kümülatif kazanç katıyor.**

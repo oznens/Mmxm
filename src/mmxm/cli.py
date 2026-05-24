@@ -377,6 +377,33 @@ def backtest(
     logger.info("Özet  → {}", out_summary)
 
 
+@app.command("combine-strategies")
+def combine_strategies(
+    signal_files: list[Path] = typer.Argument(..., help="strateji JSONL'leri"),
+    out: Path = typer.Option(..., "--out"),
+    rule: str = typer.Option("and", "--rule", help="and | or"),
+    time_window_hours: float = typer.Option(4.0, "--window", help="confluence zaman penceresi"),
+) -> None:
+    """Birden fazla strateji sinyalini birleştir (AND/OR)."""
+    from mmxm.comparison import load_jsonl_as_trade_calls
+    from mmxm.strategies.combine import combine
+
+    sets = []
+    for p in signal_files:
+        sigs = load_jsonl_as_trade_calls(p)
+        logger.info("yüklenen: {} sinyal ← {}", len(sigs), p)
+        sets.append(sigs)
+
+    merged = combine(sets, rule=rule, time_window_hours=time_window_hours)
+    logger.info("birleşim ({}): {} → {} confluence sinyali", rule, [len(s) for s in sets], len(merged))
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as fh:
+        for s in merged:
+            fh.write(s.model_dump_json() + "\n")
+    logger.info("yazıldı → {}", out)
+
+
 @app.command("tune-strategy")
 def tune_strategy(
     strategy_name: str = typer.Argument(..., help="turtle_soup | fvg_retest"),
