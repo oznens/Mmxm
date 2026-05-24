@@ -182,8 +182,11 @@ def _fetch_ohlcv_yahoo(
 
     ticker = _YAHOO_SYMBOL_MAP.get(symbol)
     if not ticker:
-        # Fallback: USDT pair → "BASE-USD" formatı denesin
-        if symbol.endswith("/USDT") or symbol.endswith("/USD"):
+        # Yahoo-style direct ticker (NQ=F, EURUSD=X, GC=F, BTC-USD) → pass-through
+        if symbol.endswith("=F") or symbol.endswith("=X") or "-USD" in symbol:
+            ticker = symbol
+        # USDT pair → "BASE-USD" formatı
+        elif symbol.endswith("/USDT") or symbol.endswith("/USD"):
             base = symbol.split("/")[0]
             ticker = f"{base}-USD"
         else:

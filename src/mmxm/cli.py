@@ -342,5 +342,59 @@ def backtest(
     logger.info("Özet  → {}", out_summary)
 
 
+@app.command()
+def compare(
+    trader_trades: Path = typer.Argument(..., help="trader JSONL (Dreyko/wuipx)"),
+    strategy_signals: list[Path] = typer.Argument(..., help="strateji JSONL(ler)"),
+    max_hours: float = typer.Option(48.0, "--max-hours", help="eşleşme penceresi"),
+    out: Path = typer.Option(Path("reports/comparison.json"), "--out"),
+) -> None:
+    """Trader çağrıları vs strateji sinyalleri overlap analizi."""
+    import json
+
+    from mmxm.comparison import find_matches, load_jsonl_as_trade_calls, overlap_stats
+
+    trader = load_jsonl_as_trade_calls(trader_trades)
+    sigs: list = []
+    for p in strategy_signals:
+        sigs.extend(load_jsonl_as_trade_calls(p))
+    logger.info("trader trades: {} | strategy signals: {}", len(trader), len(sigs))
+
+    summaries = find_matches(trader, sigs, max_hours=max_hours)
+    stats = overlap_stats(summaries)
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        json.dumps({
+            "stats": stats,
+            "summaries": [s.model_dump(mode="json") for s in summaries],
+        }, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    logger.info("=" * 50)
+    logger.info("OVERLAP")
+    logger.info("=" * 50)
+    logger.info("Coverage: {} / {} trader trade'i ({:.0%}) en az 1 strateji eşleşmesine sahip",
+                stats["n_with_at_least_one_match"], stats["n_trader_trades"], stats["coverage"])
+    logger.info("Ort. eşleşme/trade: {}", stats["avg_matches_per_trade"])
+    logger.info("")
+    for s in summaries:
+        if s.best_match:
+            bm = s.best_match
+            entry_diff = f"{bm.entry_diff_pct:+.2f}%" if bm.entry_diff_pct is not None else "—"
+            target_diff = f"{bm.target_diff_pct:+.2f}%" if bm.target_diff_pct is not None else "—"
+            logger.info(
+                "✓ [{}] {} {} ({}) → strateji {:+.1f}h, entry∆ {}, target∆ {}",
+                s.trader_posted_at.strftime("%m-%d %H:%M"),
+                s.trader_symbol, s.trader_side.upper(), s.trader_handle,
+                bm.hours_diff, entry_diff, target_diff,
+            )
+        else:
+            logger.info("✗ [{}] {} {} ({}) → eşleşme yok",
+                        s.trader_posted_at.strftime("%m-%d %H:%M"),
+                        s.trader_symbol, s.trader_side.upper(), s.trader_handle)
+
+
 if __name__ == "__main__":
     app()
