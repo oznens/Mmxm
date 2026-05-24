@@ -70,6 +70,9 @@ def parse(
     rpm: int = typer.Option(4, "--rpm", help="dakika başına istek üst sınırı (Gemini 2.5 Flash free tier 5)"),
     limit: Optional[int] = typer.Option(None, "--limit", help="ilk N posta sınırla"),
     no_images: bool = typer.Option(False, "--no-images", help="grafikleri yollama"),
+    resume: bool = typer.Option(
+        True, "--resume/--no-resume", help="çıktı dosyasında olan post_id'leri atla"
+    ),
 ) -> None:
     """Ham X postlarını LLM ile parse edip ParsedPost JSONL'e yaz."""
     import os
@@ -78,7 +81,7 @@ def parse(
     from google import genai
 
     from mmxm.parsing import parse_batch
-    from mmxm.parsing.storage import write_parsed_jsonl
+    from mmxm.parsing.storage import already_parsed_ids, append_parsed
     from mmxm.scraping.storage import read_jsonl
 
     load_dotenv()
@@ -91,12 +94,24 @@ def parse(
         posts.extend(list(read_jsonl(inp)))
     if limit:
         posts = posts[:limit]
+
+    skip_ids = already_parsed_ids(out) if resume else set()
+    if skip_ids:
+        before = len(posts)
+        posts = [p for p in posts if p.post_id not in skip_ids]
+        logger.info("resume: {} post zaten parsed, {} yeni", before - len(posts), len(posts))
+
+    if not posts:
+        logger.info("parse edilecek post yok.")
+        return
+
     logger.info(
-        "parse başlıyor n_posts={} model={} concurrency={} rpm={}",
+        "parse başlıyor n_posts={} model={} concurrency={} rpm={} out={}",
         len(posts),
         model,
         concurrency,
         rpm,
+        out,
     )
 
     client = genai.Client(api_key=api_key)
@@ -109,13 +124,13 @@ def parse(
             include_images=not no_images,
             concurrency=concurrency,
             requests_per_minute=rpm,
+            on_success=lambda raw, parsed: append_parsed(out, raw, parsed),
         )
 
     results = asyncio.run(_run())
-    ok = [(raw, parsed) for raw, parsed, err in results if parsed is not None]
-    fail = [(raw, err) for raw, _, err in results if err is not None]
-    n_written = write_parsed_jsonl(out, ok)
-    logger.info("parse bitti yazılan={} başarısız={} path={}", n_written, len(fail), out)
+    ok = sum(1 for _, p, _ in results if p is not None)
+    fail = [(raw, err) for raw, p, err in results if p is None]
+    logger.info("parse bitti yazılan={} başarısız={} path={}", ok, len(fail), out)
     if fail:
         for raw, err in fail[:5]:
             logger.warning("  fail id={} err={}", raw.post_id, err)

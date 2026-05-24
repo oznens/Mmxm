@@ -217,21 +217,26 @@ async def parse_batch(
     *,
     model: str = DEFAULT_MODEL,
     include_images: bool = True,
-    concurrency: int = 3,
+    concurrency: int = 2,
     requests_per_minute: int = DEFAULT_RPM,
     thinking_budget: int = 1024,
+    on_success: Optional[Any] = None,
 ) -> list[tuple[RawPost, Optional[ParsedPost], Optional[Exception]]]:
     """Birden fazla postu paralel parse et.
 
-    Concurrency `concurrency` paralel görev; `RateLimiter` ile dakika başına
-    `requests_per_minute` üst sınırı uygulanır (free tier 15 RPM, default 12).
+    `on_success(raw, parsed)` her başarılı parse sonrasında çağrılır — JSONL
+    streaming append için kullanılabilir, böylece uzun koşularda kazanç kaybı olmaz.
     """
     sem = asyncio.Semaphore(concurrency)
     limiter = RateLimiter(requests_per_minute)
+    completed = 0
+    posts_list = list(posts)
+    total = len(posts_list)
 
     async with httpx.AsyncClient(timeout=15.0) as http_client:
 
         async def _one(post: RawPost):
+            nonlocal completed
             async with sem:
                 try:
                     parsed = await parse_post(
@@ -243,9 +248,18 @@ async def parse_batch(
                         thinking_budget=thinking_budget,
                         rate_limiter=limiter,
                     )
+                    if on_success is not None:
+                        try:
+                            on_success(post, parsed)
+                        except Exception as cb_err:
+                            logger.error("on_success callback hata: {}", cb_err)
+                    completed += 1
+                    if completed % 10 == 0 or completed == total:
+                        logger.info("ilerleme {}/{} ({:.0%})", completed, total, completed / total)
                     return (post, parsed, None)
                 except Exception as e:
+                    completed += 1
                     logger.warning("parse fail id={} err={}", post.post_id, e)
                     return (post, None, e)
 
-        return await asyncio.gather(*(_one(p) for p in posts))
+        return await asyncio.gather(*(_one(p) for p in posts_list))
