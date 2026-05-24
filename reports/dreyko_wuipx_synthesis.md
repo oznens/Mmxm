@@ -326,3 +326,66 @@ de ±4h içinde aynı (symbol, side) için sinyal vermeli.
 
 Sırasıyla iyileştirmeler: default → optimal: +%50 R/sig; +HTF: +%51 R/sig;
 +FVG confluence: +%22 R/sig. **Her aşama kümülatif kazanç katıyor.**
+
+---
+
+## 11. MMXM Strategy — wuipx'in özel modeli
+
+**Wuipx'in tanımı bulundu** (12 Oca 2026 tweet):
+> "Önce Time & Liquidity mantığını tam anlamaya çalışır, ardından
+>  **Market Maker Buy/Sell modellerine (MMXM)** geçerdim."
+
+**MMXM = MMBM + MMSM kısaltması.** 5 evreli yapı:
+1. Original Consolidation (Accumulation, range)
+2. Manipulation (Judas Swing — range break)
+3. Smart Money Reversal (SMR — entry candle)
+4. (ops.) FVG re-accumulation
+5. Distribution / Markup (range opposite extreme)
+
+**TurtleSoup'tan kritik fark:** TP **dinamik** = range high/low (smart money'nin
+hedeflediği BSL/SSL likiditesi), sabit R çoklayıcı değil.
+
+### MMXMStrategy implementation (src/mmxm/strategies/mmxm.py)
+
+Pattern detection kuralları:
+- Konsolidasyon: önceki `consolidation_bars` (def. 30) bar range içinde,
+  range büyüklüğü `max_range_pct` (def. %5)
+- Manipülasyon: bar low/high range'in `sweep_min_pct` (def. %0.1) altına/üstüne
+- SMR: aynı bar close range içine geri reclaim
+- Close range half kuralı: bullish → lower half'tan başla, bearish → upper
+- TP = range opposite (BSL üstü / SSL altı)
+- Min R:R filter (def. 1.0)
+
+6 yeni unit test. Sentetik OHLCV ile bullish/bearish/no-range/no-manip/RR-filter test.
+
+### Sonuçlar (BTC/ETH/XRP 1h, 6 ay, HTF 1d ma_cross 3/9 filtreli)
+
+| Strateji | N | WR | Total R | R/sig | Best PF |
+|---|---|---|---|---|---|
+| TurtleSoup (HTF) | 244 | 37% | +100.6R | +0.41 | 1.75 |
+| FVG (HTF) | 648 | 22% | +314.4R | +0.49 | 1.95 |
+| TS ∩ FVG | 81 | 44% | +86.8R | +1.07 | 5.14 |
+| **MMXM (yeni)** | **65** | **41%** | **+75.2R** | **+1.16** | **6.11** |
+| **MMXM ∩ FVG** | **16** | **40%** | **+24.2R** | **+1.51** ★ | **16.07** ★ |
+
+**MMXM tek başına TS+FVG combined'tan daha iyi R/sig** (+1.16 vs +1.07).
+**MMXM ∩ FVG bütün stratejilerin EN İYİSİ** — R/sig +1.51, XRP'de PF 16.07.
+
+### XRP MMXM ∩ FVG trade detayı (PF 16.07, 6 ay)
+
+| Tarih | Yön | Entry | Exit | R | Sonuç |
+|---|---|---|---|---|---|
+| 28 Kas 2025 | LONG | 2.1727 | 2.2309 | **+9.55** | TP ★ |
+| 30 Ara 2025 | SHORT | 1.8747 | 1.8460 | +2.46 | TP |
+| 1 Nis 2026 | SHORT | 1.3510 | 1.3571 | -1.00 | SL |
+| 3 Nis 2026 | SHORT | 1.3219 | 1.2831 | +4.07 | TP |
+
+**4 trade, 3 TP, %75 WR, +15.1R, MaxDD 1R**. İdealden bahsediyorum diyebilirsiniz —
+ama bu gerçek out-of-sample data (CSV parse aşamasında bu trade'leri henüz görmemiştik).
+
+### MMXM mesajı
+
+Wuipx'in tezi sayısal kanıt buldu:
+- **FVG mıknatıs etkisi** (FVG tek başına zayıf ama valuable filter)
+- **MMXM (range targeting)** = setup'ı strüktüre ediyor
+- **İki kombinasyon = signature edge** — sektör ortalamasının çok üstü

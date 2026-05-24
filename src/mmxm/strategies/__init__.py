@@ -5,12 +5,14 @@ backtest engine'i tarafından tüketilir.
 
 from mmxm.strategies.base import Strategy
 from mmxm.strategies.fvg_retest import FVGRetestStrategy
+from mmxm.strategies.mmxm import MMXMStrategy
 from mmxm.strategies.turtle_soup import TurtleSoupStrategy
 
 # İsim → sınıf registry
 REGISTRY: dict[str, type[Strategy]] = {
     "turtle_soup": TurtleSoupStrategy,
     "fvg_retest": FVGRetestStrategy,
+    "mmxm": MMXMStrategy,
 }
 
 
@@ -20,4 +22,4 @@ def get_strategy(name: str, **kwargs) -> Strategy:
     return REGISTRY[name](**kwargs)
 
 
-__all__ = ["FVGRetestStrategy", "REGISTRY", "Strategy", "TurtleSoupStrategy", "get_strategy"]
+__all__ = ["FVGRetestStrategy", "MMXMStrategy", "REGISTRY", "Strategy", "TurtleSoupStrategy", "get_strategy"]
