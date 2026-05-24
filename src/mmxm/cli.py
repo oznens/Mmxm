@@ -235,6 +235,53 @@ def patterns(
         )
 
 
+@app.command("scan-strategy")
+def scan_strategy(
+    strategy_name: str = typer.Argument(..., help="strateji adı (turtle_soup, ...)"),
+    symbol: str = typer.Option(..., "--symbol", help="ör. BTC/USDT"),
+    out: Path = typer.Option(..., "--out", help="çıkış JSONL"),
+    timeframe: str = typer.Option("1h", "--tf"),
+    since: Optional[datetime] = typer.Option(None, "--since"),
+    until: Optional[datetime] = typer.Option(None, "--until"),
+    exchange: str = typer.Option("yahoo", "--exchange"),
+    target_r: float = typer.Option(3.0, "--target-r"),
+    lookback: int = typer.Option(20, "--lookback"),
+) -> None:
+    """OHLCV indir, strateji ile tara, sinyalleri TradeCallRecord JSONL'e yaz."""
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+
+    from mmxm.backtest.data import fetch_ohlcv
+    from mmxm.strategies import get_strategy
+
+    if since is None:
+        since = _dt(2024, 1, 1, tzinfo=_tz.utc)
+    if until is None:
+        until = _dt.now(_tz.utc)
+
+    logger.info("strateji taraması {} {} {} {} → {}", strategy_name, symbol, timeframe, since.date(), until.date())
+    ohlcv = fetch_ohlcv(symbol, timeframe, since=since, until=until, exchange_id=exchange)
+    if ohlcv.empty:
+        raise typer.BadParameter(f"OHLCV boş: {symbol} {timeframe}")
+    logger.info("OHLCV {} bar", len(ohlcv))
+
+    strategy = get_strategy(strategy_name, lookback=lookback, target_r=target_r)
+    signals = strategy.scan(symbol, ohlcv)
+    logger.info("sinyal sayısı: {}", len(signals))
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as fh:
+        for s in signals:
+            fh.write(s.model_dump_json() + "\n")
+    logger.info("yazıldı → {}", out)
+
+    # Hızlı özet
+    if signals:
+        longs = sum(1 for s in signals if s.side.value == "long")
+        shorts = sum(1 for s in signals if s.side.value == "short")
+        logger.info("  long: {} | short: {}", longs, shorts)
+
+
 @app.command()
 def backtest(
     trades_file: Path = typer.Argument(..., help="trade_calls.jsonl"),
