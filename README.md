@@ -43,8 +43,11 @@ cp .env.example .env  # değerleri doldur
 ## CLI
 
 ```bash
-# 1. Scrape — belirli trader'ların son N tweet'i
-python -m mmxm scrape --traders config/traders.yaml --since 2024-01-01
+# 1. Scrape — belirli trader'ların son N tweet'i (Nitter RSS, ücretsiz)
+python -m mmxm scrape \
+    --traders config/traders.yaml \
+    --nitter https://nitter.net,https://nitter.privacydev.net \
+    --since 2024-01-01
 
 # 2. Parse — ham postlardan structured trade çıkar
 python -m mmxm parse data/raw/*.jsonl --out data/processed/trades.jsonl
@@ -74,11 +77,25 @@ tests/
 data/                    # gitignore (raw / processed / cache)
 ```
 
+## Veri kaynağı kararı
+
+Şu an **ücretsiz Nitter RSS** backend'i aktif (`src/mmxm/scraping/x_scrape.py`).
+
+- Auth gerekmiyor. `NITTER_INSTANCES` env'i veya `--nitter` flag'iyle bir veya
+  daha fazla instance veriyorsun; ilki başarısız olursa sıradakine geçiliyor.
+- RSS feed her trader için **yalnızca son ~20 tweet'i** veriyor — tarihsel arşiv
+  bu yolla mümkün değil. Derin geçmiş gerekirse `twscrape` benzeri bir backend
+  eklenmesi gerekecek (cookie tabanlı, throwaway hesap).
+- Public Nitter instance'larının çalışırlık durumu sık değişiyor; canlı liste:
+  https://github.com/zedeus/nitter/wiki/Instances
+
+`XApiBackend` stub olarak duruyor — resmi API'ye geçilirse `--source api`.
+
 ## Açık kararlar (sonraki session)
 
-- [ ] Takip edilecek trader listesi (config/traders.yaml)
-- [ ] X veri kaynağı: resmi API v2 (paid tier) mi, snscrape benzeri unofficial scrape mı?
+- [ ] Takip edilecek trader listesi (`config/traders.yaml`)
 - [ ] LLM parse şemasının final hali (TP1/TP2/TP3, leverage, invalidation vs.)
+- [ ] Tarihsel veri ihtiyacı doğrulanırsa twscrape backend'i
 
 ## Lisans
 

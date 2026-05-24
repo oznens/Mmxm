@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<channel>
+<atom:link href="https://nitter.net/example_trader/rss" rel="self" type="application/rss+xml"/>
+<title>example_trader / @example_trader</title>
+<link>http://nitter.net/example_trader</link>
+<description>Twitter feed for: @example_trader.</description>
+<language>en-us</language>
+<ttl>40</ttl>
+<item>
+<title>BTC long setup: entry 60000, SL 58500, TP 64000</title>
+<dc:creator>@example_trader</dc:creator>
+<description><![CDATA[<p>BTC long setup: entry 60000, SL 58500, TP 64000. RSI bullish divergence on 4h, support hold at 60k. R:R ~ 2.6</p>]]></description>
+<pubDate>Wed, 01 May 2024 12:00:00 GMT</pubDate>
+<guid isPermaLink="true">http://nitter.net/example_trader/status/1785000000000000001#m</guid>
+<link>http://nitter.net/example_trader/status/1785000000000000001#m</link>
+</item>
+<item>
+<title>R to @someone_else: yes I agree</title>
+<dc:creator>@example_trader</dc:creator>
+<description><![CDATA[<p>R to @someone_else: yes I agree</p>]]></description>
+<pubDate>Tue, 30 Apr 2024 18:00:00 GMT</pubDate>
+<guid isPermaLink="true">http://nitter.net/example_trader/status/1785000000000000002#m</guid>
+<link>http://nitter.net/example_trader/status/1785000000000000002#m</link>
+</item>
+<item>
+<title>RT by @example_trader: Great market analysis</title>
+<dc:creator>@other_account</dc:creator>
+<description><![CDATA[<p>RT by @example_trader: Great market analysis from someone else</p>]]></description>
+<pubDate>Tue, 30 Apr 2024 10:00:00 GMT</pubDate>
+<guid isPermaLink="true">http://nitter.net/other_account/status/1785000000000000003#m</guid>
+<link>http://nitter.net/other_account/status/1785000000000000003#m</link>
+</item>
+<item>
+<title>ETH short — rejection at 3200 resistance, target 3000</title>
+<dc:creator>@example_trader</dc:creator>
+<description><![CDATA[<p>ETH short &#8212; rejection at 3200 resistance, target 3000, SL 3260. 1h timeframe.</p>]]></description>
+<pubDate>Mon, 29 Apr 2024 09:30:00 GMT</pubDate>
+<guid isPermaLink="true">http://nitter.net/example_trader/status/1785000000000000004#m</guid>
+<link>http://nitter.net/example_trader/status/1785000000000000004#m</link>
+</item>
+</channel>
+</rss>

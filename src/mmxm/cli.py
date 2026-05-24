@@ -17,7 +17,7 @@ from loguru import logger
 app = typer.Typer(add_completion=False, help="Mmxm pipeline CLI")
 
 
-def _build_backend(source: str):
+def _build_backend(source: str, nitter_instances: Optional[str] = None):
     """Seçilen backend'i import et ve instantiate et."""
     import os
 
@@ -30,10 +30,12 @@ def _build_backend(source: str):
 
         token = os.environ.get("X_BEARER_TOKEN", "")
         return XApiBackend(bearer_token=token)
-    elif source == "scrape":
-        from mmxm.scraping.x_scrape import XScrapeBackend
+    elif source in ("scrape", "nitter"):
+        from mmxm.scraping.x_scrape import NitterScrapeBackend
 
-        return XScrapeBackend()
+        raw = nitter_instances or os.environ.get("NITTER_INSTANCES", "")
+        instances = [u.strip() for u in raw.split(",") if u.strip()]
+        return NitterScrapeBackend(instances=instances)
     else:
         raise typer.BadParameter(f"bilinmeyen source: {source} (api | scrape)")
 
@@ -42,14 +44,19 @@ def _build_backend(source: str):
 def scrape(
     traders: Path = typer.Option(..., "--traders", help="traders.yaml yolu"),
     out_dir: Path = typer.Option(Path("data/raw"), "--out", help="JSONL çıkış klasörü"),
-    source: str = typer.Option("api", "--source", help="api | scrape"),
+    source: str = typer.Option("scrape", "--source", help="scrape (Nitter RSS) | api"),
+    nitter: Optional[str] = typer.Option(
+        None,
+        "--nitter",
+        help="Virgülle ayrılmış Nitter instance URL'leri. Boşsa NITTER_INSTANCES env kullanılır.",
+    ),
     since: Optional[datetime] = typer.Option(None, "--since", help="ISO tarih"),
     limit: Optional[int] = typer.Option(None, "--limit", help="kullanıcı başı tweet limiti"),
 ) -> None:
     """Trader listesini X üzerinden çek, JSONL'e yaz."""
     from mmxm.scraping.runner import scrape_all
 
-    backend = _build_backend(source)
+    backend = _build_backend(source, nitter_instances=nitter)
     summary = asyncio.run(scrape_all(backend, traders, out_dir, since=since, limit=limit))
     for handle, n in summary.items():
         logger.info("özet handle={} n={}", handle, n)

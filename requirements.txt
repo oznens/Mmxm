@@ -1,14 +1,7 @@
 # --- HTTP / scraping ---
+# Nitter RSS feed'lerini stdlib xml.etree ile parse ediyoruz — BeautifulSoup/lxml gerekmiyor.
 httpx>=0.27.0
 tenacity>=8.2.3
-beautifulsoup4>=4.12.3
-lxml>=5.2.0
-
-# --- X / Twitter clients (decision pending, both options listed) ---
-# Official API path:
-tweepy>=4.14.0
-# Unofficial scraping path:
-snscrape>=0.7.0.20230622 ; python_version < "3.13"
 
 # --- LLM-based parsing ---
 anthropic>=0.40.0
