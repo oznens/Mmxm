@@ -62,6 +62,8 @@ data/raw/
 data/processed/
 data/cache/
 data/prices/
+data/*.db
+data/*.sqlite*
 *.parquet
 *.csv
 *.jsonl

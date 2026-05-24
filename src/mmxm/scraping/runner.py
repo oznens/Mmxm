@@ -1,8 +1,12 @@
-"""Trader listesini scrape edip ham postları JSONL'e yazan koordinatör."""
+"""Trader listesini scrape edip ham postları JSONL'e yazan koordinatör.
+
+Trader'lar sıralı çekiliyor: Scweet tek auth_token ile aynı anda yalnızca bir
+sorguya izin veriyor ("No eligible accounts" hatası). Paralelleştirmek istersen
+birden fazla hesap (`cookies_file`) gerekir.
+"""
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -52,19 +56,16 @@ async def scrape_all(
     cfg = TradersFile.load(traders_path)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    summary: dict[str, int] = {}
     try:
-        results = await asyncio.gather(
-            *(scrape_trader(backend, t, out_dir, since, limit) for t in cfg.traders),
-            return_exceptions=True,
-        )
+        for trader in cfg.traders:
+            try:
+                summary[trader.handle] = await scrape_trader(
+                    backend, trader, out_dir, since, limit
+                )
+            except Exception as e:
+                logger.error("handle={} hata={}", trader.handle, e)
+                summary[trader.handle] = -1
     finally:
         await backend.close()
-
-    summary: dict[str, int] = {}
-    for trader, result in zip(cfg.traders, results):
-        if isinstance(result, Exception):
-            logger.error("handle={} hata={}", trader.handle, result)
-            summary[trader.handle] = -1
-        else:
-            summary[trader.handle] = result
     return summary
