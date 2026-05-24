@@ -92,14 +92,17 @@ def parse(
     posts = []
     for inp in inputs:
         posts.extend(list(read_jsonl(inp)))
-    if limit:
-        posts = posts[:limit]
 
     skip_ids = already_parsed_ids(out) if resume else set()
     if skip_ids:
         before = len(posts)
         posts = [p for p in posts if p.post_id not in skip_ids]
         logger.info("resume: {} post zaten parsed, {} yeni", before - len(posts), len(posts))
+
+    # --limit resume filter SONRASI uygulanır (yoksa zaten parse edilmiş ilk N
+    # post'la dolu chunk gelir, grinder boş iter yapar).
+    if limit:
+        posts = posts[:limit]
 
     if not posts:
         logger.info("parse edilecek post yok.")

@@ -33,7 +33,7 @@ from mmxm.parsing.schema import ParsedPost
 
 DEFAULT_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_RPM = 10  # Flash-Lite free tier 15 RPM; güvenlik payıyla 10
-MAX_RETRIES_ON_429 = 3
+MAX_RETRIES_ON_429 = 1  # Quota kilitli ise hızlı vazgeç; grinder bir sonraki iter'de tekrar dener
 MAX_RETRIES_ON_5XX = 2  # 503 UNAVAILABLE vb. transient server hataları
 
 
