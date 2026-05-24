@@ -1,0 +1,123 @@
+// @version=5
+// Mmxm Turtle Soup Detector — Dreyko / wuipx tarzı ICT/SMC setup
+//
+// Mantik:
+//   1. Onceki N bar swing low/high = likidite havuzu
+//   2. Fiyat o seviyeyi sweep eder (manipulation)
+//   3. AYNI mum range'e geri kapanir (reclaim)
+//   4. Entry = reclaim close'unda
+//   5. SL = wick'in disinda (small buffer)
+//   6. TP = sabit R coklayici (varsayilan 2R) VEYA range opposite
+//
+// Opsiyonel: HTF bias filtresi (1D MA cross) — sadece HTF yon ile uyumlu sinyaller
+//
+// Optimal parametreler (mmxm projesi backtest sonucu, BTC/USDT 1h):
+//   lookback=10, sweep_pct=0.05, reclaim_pct=0.05, target_r=2.0
+//   HTF=1D, fast_ma=3, slow_ma=9 → PF 2.69, R/sig +0.86 (9 ay)
+//   OOS (3 ay test): R/sig +0.49, PF 1.55 (BTC MMXM)
+
+indicator("Mmxm Turtle Soup Detector", shorttitle="TS", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// ─── Inputs ────────────────────────────────────────────────────────────────
+
+g_ts = "Turtle Soup Parametreleri"
+i_lookback        = input.int(10,   "Lookback bars", minval=3, group=g_ts, tooltip="Swing low/high için bakılacak bar sayısı")
+i_sweep_pct       = input.float(0.05, "Sweep min %",   minval=0.01, step=0.01, group=g_ts, tooltip="Likidite süpürme min mesafe (%)") / 100
+i_reclaim_pct     = input.float(0.05, "Reclaim min %", minval=0.01, step=0.01, group=g_ts, tooltip="Close'un swing seviyesine reclaim min (%)") / 100
+i_sl_buffer_pct   = input.float(0.2,  "SL buffer %",    minval=0.0, step=0.01, group=g_ts, tooltip="SL wick'ten ne kadar uzakta") / 100
+i_target_r        = input.float(2.0,  "Target R",       minval=0.5, step=0.5,  group=g_ts, tooltip="TP için R çoklayıcı (risk × target_r)")
+i_debounce_bars   = input.int(10,   "Debounce bars",  minval=1,  group=g_ts, tooltip="Ardışık sinyaller arası min bar")
+
+g_htf = "HTF Bias Filtresi"
+i_use_htf = input.bool(true,   "HTF filtresi aktif", group=g_htf, tooltip="Aktifse: long sadece HTF bullish'de, short sadece bearish'de")
+i_htf_tf  = input.timeframe("D", "HTF timeframe",     group=g_htf)
+i_htf_fast= input.int(3,        "Fast MA",            minval=1, group=g_htf)
+i_htf_slow= input.int(9,        "Slow MA",            minval=2, group=g_htf)
+
+g_viz = "Görsel"
+i_show_levels = input.bool(true, "Entry/SL/TP çizgileri çiz", group=g_viz)
+i_level_extend = input.int(20,   "Çizgiler kaç bar uzansın",  minval=5, group=g_viz)
+i_show_swing_levels = input.bool(true, "Swing high/low yatay çizgi", group=g_viz)
+
+// ─── Swing high/low (current bar HARIÇ) ────────────────────────────────────
+
+swing_low  = ta.lowest(low[1],  i_lookback)
+swing_high = ta.highest(high[1], i_lookback)
+
+if i_show_swing_levels
+    plot(swing_low,  color=color.new(color.gray, 60), title="Swing Low",  style=plot.style_circles, linewidth=1)
+    plot(swing_high, color=color.new(color.gray, 60), title="Swing High", style=plot.style_circles, linewidth=1)
+
+// ─── HTF bias ──────────────────────────────────────────────────────────────
+
+htf_fast_ma = request.security(syminfo.tickerid, i_htf_tf, ta.sma(close, i_htf_fast)[1], lookahead=barmerge.lookahead_off)
+htf_slow_ma = request.security(syminfo.tickerid, i_htf_tf, ta.sma(close, i_htf_slow)[1], lookahead=barmerge.lookahead_off)
+htf_bullish = htf_fast_ma > htf_slow_ma
+htf_bearish = htf_fast_ma < htf_slow_ma
+
+allow_long  = not i_use_htf or htf_bullish
+allow_short = not i_use_htf or htf_bearish
+
+// ─── Turtle Soup pattern detection ─────────────────────────────────────────
+
+// Bullish TS: low swing_low ALTINI süpürdü + close swing_low ÜSTÜNE reclaim
+bullish_sweep   = low  < swing_low  * (1 - i_sweep_pct)
+bullish_reclaim = close > swing_low * (1 + i_reclaim_pct)
+bullish_ts_raw  = bullish_sweep and bullish_reclaim
+
+// Bearish TS: high swing_high ÜSTÜNÜ süpürdü + close swing_high ALTINA reclaim
+bearish_sweep   = high > swing_high * (1 + i_sweep_pct)
+bearish_reclaim = close < swing_high * (1 - i_reclaim_pct)
+bearish_ts_raw  = bearish_sweep and bearish_reclaim
+
+// Debounce
+var int last_signal_bar = -1000
+can_signal = (bar_index - last_signal_bar) >= i_debounce_bars
+
+bullish_signal = bullish_ts_raw and allow_long  and can_signal
+bearish_signal = bearish_ts_raw and allow_short and can_signal
+
+// ─── Sinyal markerları + entry/SL/TP çizimi ────────────────────────────────
+
+if bullish_signal
+    last_signal_bar := bar_index
+    label.new(bar_index, low, "TS\nLONG", style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white, size=size.small)
+    if i_show_levels
+        entry = close
+        sl    = low * (1 - i_sl_buffer_pct)
+        risk  = entry - sl
+        tp    = entry + risk * i_target_r
+
+        line.new(bar_index, entry, bar_index + i_level_extend, entry, color=color.new(color.yellow, 0), width=2, extend=extend.none)
+        line.new(bar_index, sl,    bar_index + i_level_extend, sl,    color=color.new(color.red, 0),    width=2, style=line.style_dashed)
+        line.new(bar_index, tp,    bar_index + i_level_extend, tp,    color=color.new(color.green, 0),  width=2, style=line.style_dashed)
+
+        label.new(bar_index + i_level_extend, entry, "Entry " + str.tostring(entry, format.mintick), style=label.style_label_left, color=color.new(color.yellow, 80), textcolor=color.yellow, size=size.tiny)
+        label.new(bar_index + i_level_extend, sl,    "SL "    + str.tostring(sl,    format.mintick), style=label.style_label_left, color=color.new(color.red, 80),    textcolor=color.red,    size=size.tiny)
+        label.new(bar_index + i_level_extend, tp,    "TP "    + str.tostring(tp,    format.mintick) + " (" + str.tostring(i_target_r, "#.#") + "R)", style=label.style_label_left, color=color.new(color.green, 80), textcolor=color.green, size=size.tiny)
+
+if bearish_signal
+    last_signal_bar := bar_index
+    label.new(bar_index, high, "TS\nSHORT", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+    if i_show_levels
+        entry = close
+        sl    = high * (1 + i_sl_buffer_pct)
+        risk  = sl - entry
+        tp    = entry - risk * i_target_r
+
+        line.new(bar_index, entry, bar_index + i_level_extend, entry, color=color.new(color.yellow, 0), width=2, extend=extend.none)
+        line.new(bar_index, sl,    bar_index + i_level_extend, sl,    color=color.new(color.red, 0),    width=2, style=line.style_dashed)
+        line.new(bar_index, tp,    bar_index + i_level_extend, tp,    color=color.new(color.green, 0),  width=2, style=line.style_dashed)
+
+        label.new(bar_index + i_level_extend, entry, "Entry " + str.tostring(entry, format.mintick), style=label.style_label_left, color=color.new(color.yellow, 80), textcolor=color.yellow, size=size.tiny)
+        label.new(bar_index + i_level_extend, sl,    "SL "    + str.tostring(sl,    format.mintick), style=label.style_label_left, color=color.new(color.red, 80),    textcolor=color.red,    size=size.tiny)
+        label.new(bar_index + i_level_extend, tp,    "TP "    + str.tostring(tp,    format.mintick) + " (" + str.tostring(i_target_r, "#.#") + "R)", style=label.style_label_left, color=color.new(color.green, 80), textcolor=color.green, size=size.tiny)
+
+// ─── HTF bias visualization (gri arka plan) ───────────────────────────────
+
+bgcolor(i_use_htf and htf_bullish ? color.new(color.green, 95) : i_use_htf and htf_bearish ? color.new(color.red, 95) : na, title="HTF bias")
+
+// ─── Alerts ────────────────────────────────────────────────────────────────
+
+alertcondition(bullish_signal, title="Turtle Soup LONG",  message="TS LONG sinyali: {{ticker}} @ {{close}}")
+alertcondition(bearish_signal, title="Turtle Soup SHORT", message="TS SHORT sinyali: {{ticker}} @ {{close}}")
