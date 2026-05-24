@@ -64,10 +64,52 @@ def scrape(
 @app.command()
 def parse(
     inputs: list[Path] = typer.Argument(..., help="raw JSONL dosyaları"),
-    out: Path = typer.Option(Path("data/processed/trades.jsonl"), "--out"),
+    out: Path = typer.Option(Path("data/processed/parsed.jsonl"), "--out"),
+    model: str = typer.Option("claude-opus-4-7", "--model"),
+    concurrency: int = typer.Option(4, "--concurrency", help="paralel parse sayısı"),
+    limit: Optional[int] = typer.Option(None, "--limit", help="ilk N posta sınırla"),
+    no_images: bool = typer.Option(False, "--no-images", help="grafikleri yollama"),
 ) -> None:
-    """Ham postları LLM ile parse edip Trade JSONL'e yaz. (TODO)"""
-    raise typer.Exit(code=2)  # henüz implement edilmedi
+    """Ham X postlarını LLM ile parse edip ParsedPost JSONL'e yaz."""
+    import os
+
+    import anthropic
+    from dotenv import load_dotenv
+
+    from mmxm.parsing import parse_batch
+    from mmxm.parsing.storage import write_parsed_jsonl
+    from mmxm.scraping.storage import read_jsonl
+
+    load_dotenv()
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise typer.BadParameter("ANTHROPIC_API_KEY env değişkeni gerekli.")
+
+    posts = []
+    for inp in inputs:
+        posts.extend(list(read_jsonl(inp)))
+    if limit:
+        posts = posts[:limit]
+    logger.info("parse başlıyor n_posts={} model={} concurrency={}", len(posts), model, concurrency)
+
+    async def _run():
+        async with anthropic.AsyncAnthropic(api_key=api_key) as client:
+            return await parse_batch(
+                posts,
+                client,
+                model=model,
+                include_images=not no_images,
+                concurrency=concurrency,
+            )
+
+    results = asyncio.run(_run())
+    ok = [(raw, parsed) for raw, parsed, err in results if parsed is not None]
+    fail = [(raw, err) for raw, _, err in results if err is not None]
+    n_written = write_parsed_jsonl(out, ok)
+    logger.info("parse bitti yazılan={} başarısız={} path={}", n_written, len(fail), out)
+    if fail:
+        for raw, err in fail[:5]:
+            logger.warning("  fail id={} err={}", raw.post_id, err)
 
 
 @app.command()
