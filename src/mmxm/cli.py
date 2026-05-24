@@ -61,6 +61,55 @@ def scrape(
         logger.info("özet handle={} n={}", handle, n)
 
 
+@app.command("import-csv")
+def import_csv(
+    csv_file: Path = typer.Argument(..., help="TwExportly CSV dump"),
+    handle: str = typer.Option(..., "--handle", help="trader handle (örn. jaxiwnl21)"),
+    out: Path = typer.Option(..., "--out", help="hedef JSONL (örn. data/raw/jaxiwnl21.jsonl)"),
+    include_text_only_replies: bool = typer.Option(
+        False,
+        "--include-text-replies",
+        help="görselsiz reply'leri de dahil et (default: yalnızca media'lı reply)",
+    ),
+    include_retweets: bool = typer.Option(False, "--include-retweets"),
+    merge: bool = typer.Option(
+        True,
+        "--merge/--overwrite",
+        help="mevcut JSONL ile birleştir (dedup), yoksa üzerine yaz",
+    ),
+) -> None:
+    """TwExportly CSV'sini RawPost JSONL'e dönüştür."""
+    from mmxm.scraping.csv_import import iter_csv_posts
+    from mmxm.scraping.storage import read_jsonl, write_jsonl
+
+    new_posts = list(
+        iter_csv_posts(
+            csv_file,
+            handle=handle,
+            include_text_only_replies=include_text_only_replies,
+            include_retweets=include_retweets,
+        )
+    )
+    logger.info("CSV'den çıkan post: {} adet", len(new_posts))
+
+    if merge and out.exists():
+        existing = list(read_jsonl(out))
+        existing_ids = {p.post_id for p in existing}
+        added = [p for p in new_posts if p.post_id not in existing_ids]
+        merged = existing + added
+        n = write_jsonl(out, merged)
+        logger.info(
+            "merge: mevcut={} CSV'den yeni={} toplam={} → {}",
+            len(existing),
+            len(added),
+            n,
+            out,
+        )
+    else:
+        n = write_jsonl(out, new_posts)
+        logger.info("overwrite: {} post → {}", n, out)
+
+
 @app.command()
 def parse(
     inputs: list[Path] = typer.Argument(..., help="raw JSONL dosyaları"),
