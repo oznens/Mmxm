@@ -1,4 +1,4 @@
-// @version=5
+// @version=6
 // Mmxm Turtle Soup Detector — Dreyko / wuipx tarzı ICT/SMC setup
 //
 // Mantik:
@@ -44,9 +44,9 @@ i_show_swing_levels = input.bool(true, "Swing high/low yatay çizgi", group=g_vi
 swing_low  = ta.lowest(low[1],  i_lookback)
 swing_high = ta.highest(high[1], i_lookback)
 
-if i_show_swing_levels
-    plot(swing_low,  color=color.new(color.gray, 60), title="Swing Low",  style=plot.style_circles, linewidth=1)
-    plot(swing_high, color=color.new(color.gray, 60), title="Swing High", style=plot.style_circles, linewidth=1)
+// plot() Pine v5'te global scope ister — visibility'yi value conditional ile yonet
+plot(i_show_swing_levels ? swing_low  : na, color=color.new(color.gray, 60), title="Swing Low",  style=plot.style_circles, linewidth=1)
+plot(i_show_swing_levels ? swing_high : na, color=color.new(color.gray, 60), title="Swing High", style=plot.style_circles, linewidth=1)
 
 // ─── HTF bias ──────────────────────────────────────────────────────────────
 
