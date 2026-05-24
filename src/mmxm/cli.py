@@ -237,12 +237,62 @@ def patterns(
 
 @app.command()
 def backtest(
-    rules: Path = typer.Argument(..., help="rules.yaml"),
-    symbol: str = typer.Option("BTC/USDT", "--symbol"),
-    tf: str = typer.Option("1h", "--tf"),
+    trades_file: Path = typer.Argument(..., help="trade_calls.jsonl"),
+    out_results: Path = typer.Option(Path("reports/backtest_results.jsonl"), "--results"),
+    out_summary: Path = typer.Option(Path("reports/backtest_summary.json"), "--summary"),
+    exchange: str = typer.Option("binance", "--exchange"),
+    default_tf: str = typer.Option("1h", "--tf", help="trade'de TF belirtilmezse fallback"),
+    max_hold_days: int = typer.Option(90, "--max-hold-days"),
+    entry_mode: str = typer.Option(
+        "at_market", "--entry-mode",
+        help="at_market: post sonrası ilk bar open / limit: declared entry'ye gel bekle",
+    ),
 ) -> None:
-    """Kuralları geçmiş fiyat datasıyla simüle et. (TODO)"""
-    raise typer.Exit(code=2)
+    """Trade-call JSONL'ini geçmiş fiyat datasıyla simüle et."""
+    from mmxm.backtest import load_trade_calls, run_backtest, write_results, write_summary
+
+    trades = load_trade_calls(trades_file)
+    if not trades:
+        raise typer.BadParameter(f"{trades_file} boş")
+    logger.info("backtest başlıyor n_trades={} exchange={} entry_mode={}", len(trades), exchange, entry_mode)
+
+    results, summary = run_backtest(
+        trades,
+        exchange_id=exchange,
+        default_timeframe=default_tf,
+        max_hold_days=max_hold_days,
+        entry_mode=entry_mode,
+    )
+    write_results(out_results, results)
+    write_summary(out_summary, summary)
+
+    logger.info("=" * 50)
+    logger.info("BACKTEST ÖZETİ")
+    logger.info("=" * 50)
+    logger.info("Toplam trade:    {}", summary.n_trades_total)
+    logger.info("  TP:            {}", summary.n_tp)
+    logger.info("  SL:            {}", summary.n_sl)
+    logger.info("  Açık (window): {}", summary.n_open)
+    logger.info("  No entry:      {}", summary.n_no_entry)
+    logger.info("  Skipped:       {}", summary.n_skipped)
+    logger.info("Win rate:        {:.1%} ({}/{})", summary.win_rate, summary.n_tp, summary.n_closed)
+    logger.info("Total R:         {:+.2f}", summary.total_r)
+    logger.info("Avg R:           {:+.2f}", summary.avg_r)
+    logger.info("Avg winner R:    {:+.2f}", summary.avg_winner_r)
+    logger.info("Avg loser R:     {:+.2f}", summary.avg_loser_r)
+    logger.info("Profit factor:   {:.2f}", summary.profit_factor)
+    logger.info("Max DD (R):      {:.2f}", summary.max_drawdown_r)
+    logger.info("--- per sembol ---")
+    for sym, stats in summary.per_symbol.items():
+        logger.info("  {} n={} closed={} wr={:.0%} totalR={:+.2f}",
+                    sym, stats["n"], stats["n_closed"], stats["win_rate"], stats["total_r"])
+    if summary.per_setup:
+        logger.info("--- per setup ---")
+        for s, stats in summary.per_setup.items():
+            logger.info("  {} n={} closed={} wr={:.0%} totalR={:+.2f}",
+                        s, stats["n"], stats["n_closed"], stats["win_rate"], stats["total_r"])
+    logger.info("Detay → {}", out_results)
+    logger.info("Özet  → {}", out_summary)
 
 
 if __name__ == "__main__":
