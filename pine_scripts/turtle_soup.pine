@@ -7,46 +7,46 @@
 //   3. AYNI mum range'e geri kapanir (reclaim)
 //   4. Entry = reclaim close'unda
 //   5. SL = wick'in disinda (small buffer)
-//   6. TP = sabit R coklayici (varsayilan 2R) VEYA range opposite
+//   6. TP = sabit R coklayici
 //
-// Opsiyonel: HTF bias filtresi (1D MA cross) — sadece HTF yon ile uyumlu sinyaller
-//
-// Optimal parametreler (mmxm projesi backtest sonucu, BTC/USDT 1h):
-//   lookback=10, sweep_pct=0.05, reclaim_pct=0.05, target_r=2.0
-//   HTF=1D, fast_ma=3, slow_ma=9 → PF 2.69, R/sig +0.86 (9 ay)
-//   OOS (3 ay test): R/sig +0.49, PF 1.55 (BTC MMXM)
+// Backtest defaults (BTC/USDT 1h, 9 ay):
+//   PF 2.69, R/sig +0.86 (in-sample)
+//   PF 1.55, R/sig +0.49 (out-of-sample, walk-forward)
 
-indicator("Mmxm Turtle Soup Detector", shorttitle="TS", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+indicator("Mmxm Turtle Soup Detector", shorttitle="TS", overlay=true,
+         max_lines_count=500, max_labels_count=500, max_boxes_count=500)
 
 // ─── Inputs ────────────────────────────────────────────────────────────────
 
 g_ts = "Turtle Soup Parametreleri"
-i_lookback        = input.int(10,   "Lookback bars", minval=3, group=g_ts, tooltip="Swing low/high için bakılacak bar sayısı")
-i_sweep_pct       = input.float(0.05, "Sweep min %",   minval=0.01, step=0.01, group=g_ts, tooltip="Likidite süpürme min mesafe (%)") / 100
-i_reclaim_pct     = input.float(0.05, "Reclaim min %", minval=0.01, step=0.01, group=g_ts, tooltip="Close'un swing seviyesine reclaim min (%)") / 100
-i_sl_buffer_pct   = input.float(0.2,  "SL buffer %",    minval=0.0, step=0.01, group=g_ts, tooltip="SL wick'ten ne kadar uzakta") / 100
-i_target_r        = input.float(2.0,  "Target R",       minval=0.5, step=0.5,  group=g_ts, tooltip="TP için R çoklayıcı (risk × target_r)")
-i_debounce_bars   = input.int(10,   "Debounce bars",  minval=1,  group=g_ts, tooltip="Ardışık sinyaller arası min bar")
+i_lookback        = input.int(10,   "Lookback bars", minval=3, group=g_ts)
+i_sweep_pct       = input.float(0.05, "Sweep min %",   minval=0.01, step=0.01, group=g_ts) / 100
+i_reclaim_pct     = input.float(0.05, "Reclaim min %", minval=0.01, step=0.01, group=g_ts) / 100
+i_sl_buffer_pct   = input.float(0.2,  "SL buffer %",   minval=0.0,  step=0.01, group=g_ts) / 100
+i_target_r        = input.float(2.0,  "Target R",      minval=0.5,  step=0.5,  group=g_ts)
+i_debounce_bars   = input.int(10,   "Debounce bars",  minval=1, group=g_ts)
 
 g_htf = "HTF Bias Filtresi"
-i_use_htf = input.bool(true,   "HTF filtresi aktif", group=g_htf, tooltip="Aktifse: long sadece HTF bullish'de, short sadece bearish'de")
-i_htf_tf  = input.timeframe("D", "HTF timeframe",     group=g_htf)
-i_htf_fast= input.int(3,        "Fast MA",            minval=1, group=g_htf)
-i_htf_slow= input.int(9,        "Slow MA",            minval=2, group=g_htf)
+i_use_htf  = input.bool(true,   "HTF filtresi aktif", group=g_htf)
+i_htf_tf   = input.timeframe("D", "HTF timeframe",    group=g_htf)
+i_htf_fast = input.int(3, "Fast MA", minval=1, group=g_htf)
+i_htf_slow = input.int(9, "Slow MA", minval=2, group=g_htf)
 
 g_viz = "Görsel"
-i_show_levels = input.bool(true, "Entry/SL/TP çizgileri çiz", group=g_viz)
-i_level_extend = input.int(20,   "Çizgiler kaç bar uzansın",  minval=5, group=g_viz)
-i_show_swing_levels = input.bool(true, "Swing high/low yatay çizgi", group=g_viz)
+i_show_levels     = input.bool(true, "Entry/SL/TP çizgileri", group=g_viz)
+i_max_visible     = input.int(3,     "Detay göster: son N sinyal",  minval=1, maxval=20, group=g_viz,
+                              tooltip="Sadece son N sinyalin entry/SL/TP çizgileri görünür. Eskileri sadece küçük marker bırakır.")
+i_level_extend    = input.int(15,    "Detay çizgilerin uzunluğu (bar)", minval=3, group=g_viz)
+i_show_swing      = input.bool(false,"Swing high/low yatay çizgi", group=g_viz)
+i_show_htf_bg     = input.bool(false,"HTF bias arka plan",         group=g_viz)
 
-// ─── Swing high/low (current bar HARIÇ) ────────────────────────────────────
+// ─── Swing high/low ────────────────────────────────────────────────────────
 
 swing_low  = ta.lowest(low[1],  i_lookback)
 swing_high = ta.highest(high[1], i_lookback)
 
-// plot() Pine v5'te global scope ister — visibility'yi value conditional ile yonet
-plot(i_show_swing_levels ? swing_low  : na, color=color.new(color.gray, 60), title="Swing Low",  style=plot.style_circles, linewidth=1)
-plot(i_show_swing_levels ? swing_high : na, color=color.new(color.gray, 60), title="Swing High", style=plot.style_circles, linewidth=1)
+plot(i_show_swing ? swing_low  : na, color=color.new(color.gray, 70), title="Swing Low",  style=plot.style_circles, linewidth=1)
+plot(i_show_swing ? swing_high : na, color=color.new(color.gray, 70), title="Swing High", style=plot.style_circles, linewidth=1)
 
 // ─── HTF bias ──────────────────────────────────────────────────────────────
 
@@ -58,66 +58,96 @@ htf_bearish = htf_fast_ma < htf_slow_ma
 allow_long  = not i_use_htf or htf_bullish
 allow_short = not i_use_htf or htf_bearish
 
-// ─── Turtle Soup pattern detection ─────────────────────────────────────────
+// ─── Pattern detection ─────────────────────────────────────────────────────
 
-// Bullish TS: low swing_low ALTINI süpürdü + close swing_low ÜSTÜNE reclaim
 bullish_sweep   = low  < swing_low  * (1 - i_sweep_pct)
 bullish_reclaim = close > swing_low * (1 + i_reclaim_pct)
 bullish_ts_raw  = bullish_sweep and bullish_reclaim
 
-// Bearish TS: high swing_high ÜSTÜNÜ süpürdü + close swing_high ALTINA reclaim
 bearish_sweep   = high > swing_high * (1 + i_sweep_pct)
 bearish_reclaim = close < swing_high * (1 - i_reclaim_pct)
 bearish_ts_raw  = bearish_sweep and bearish_reclaim
 
-// Debounce
 var int last_signal_bar = -1000
 can_signal = (bar_index - last_signal_bar) >= i_debounce_bars
 
 bullish_signal = bullish_ts_raw and allow_long  and can_signal
 bearish_signal = bearish_ts_raw and allow_short and can_signal
 
-// ─── Sinyal markerları + entry/SL/TP çizimi ────────────────────────────────
+// ─── Görsel yönetimi: FIFO array — sadece son N sinyalin detayı ────────────
+
+var array<line>  entry_lines = array.new<line>()
+var array<line>  sl_lines    = array.new<line>()
+var array<line>  tp_lines    = array.new<line>()
+var array<label> tp_labels   = array.new<label>()
+var array<label> sl_labels   = array.new<label>()
+var array<label> en_labels   = array.new<label>()
+
+push_signal_viz(float entry, float sl, float tp, bool is_long) =>
+    col_en = color.new(color.yellow, 0)
+    col_sl = color.new(color.red,    0)
+    col_tp = color.new(color.green,  0)
+
+    l_en = line.new(bar_index, entry, bar_index + i_level_extend, entry, color=col_en, width=2)
+    l_sl = line.new(bar_index, sl,    bar_index + i_level_extend, sl,    color=col_sl, width=1, style=line.style_dashed)
+    l_tp = line.new(bar_index, tp,    bar_index + i_level_extend, tp,    color=col_tp, width=1, style=line.style_dashed)
+
+    lab_en = label.new(bar_index + i_level_extend, entry, "E " + str.tostring(entry, format.mintick),
+         style=label.style_label_left, color=color.new(color.yellow, 80), textcolor=color.yellow, size=size.tiny)
+    lab_sl = label.new(bar_index + i_level_extend, sl, "SL " + str.tostring(sl, format.mintick),
+         style=label.style_label_left, color=color.new(color.red, 80), textcolor=color.red, size=size.tiny)
+    lab_tp = label.new(bar_index + i_level_extend, tp,
+         "TP " + str.tostring(tp, format.mintick) + " (" + str.tostring(i_target_r, "#.#") + "R)",
+         style=label.style_label_left, color=color.new(color.green, 80), textcolor=color.green, size=size.tiny)
+
+    array.push(entry_lines, l_en)
+    array.push(sl_lines,    l_sl)
+    array.push(tp_lines,    l_tp)
+    array.push(en_labels,   lab_en)
+    array.push(sl_labels,   lab_sl)
+    array.push(tp_labels,   lab_tp)
+
+    // FIFO: eski sinyallerin detayını sil
+    while array.size(entry_lines) > i_max_visible
+        line.delete(array.shift(entry_lines))
+        line.delete(array.shift(sl_lines))
+        line.delete(array.shift(tp_lines))
+        label.delete(array.shift(en_labels))
+        label.delete(array.shift(sl_labels))
+        label.delete(array.shift(tp_labels))
+
+// ─── Sinyal: kalıcı küçük marker + son N için detay ─────────────────────────
 
 if bullish_signal
     last_signal_bar := bar_index
-    label.new(bar_index, low, "TS\nLONG", style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white, size=size.small)
+    // Kalıcı küçük marker (her sinyal için)
+    label.new(bar_index, low, "TS L", style=label.style_label_up,
+              color=color.new(color.green, 0), textcolor=color.white, size=size.tiny)
     if i_show_levels
         entry = close
         sl    = low * (1 - i_sl_buffer_pct)
         risk  = entry - sl
         tp    = entry + risk * i_target_r
-
-        line.new(bar_index, entry, bar_index + i_level_extend, entry, color=color.new(color.yellow, 0), width=2, extend=extend.none)
-        line.new(bar_index, sl,    bar_index + i_level_extend, sl,    color=color.new(color.red, 0),    width=2, style=line.style_dashed)
-        line.new(bar_index, tp,    bar_index + i_level_extend, tp,    color=color.new(color.green, 0),  width=2, style=line.style_dashed)
-
-        label.new(bar_index + i_level_extend, entry, "Entry " + str.tostring(entry, format.mintick), style=label.style_label_left, color=color.new(color.yellow, 80), textcolor=color.yellow, size=size.tiny)
-        label.new(bar_index + i_level_extend, sl,    "SL "    + str.tostring(sl,    format.mintick), style=label.style_label_left, color=color.new(color.red, 80),    textcolor=color.red,    size=size.tiny)
-        label.new(bar_index + i_level_extend, tp,    "TP "    + str.tostring(tp,    format.mintick) + " (" + str.tostring(i_target_r, "#.#") + "R)", style=label.style_label_left, color=color.new(color.green, 80), textcolor=color.green, size=size.tiny)
+        push_signal_viz(entry, sl, tp, true)
 
 if bearish_signal
     last_signal_bar := bar_index
-    label.new(bar_index, high, "TS\nSHORT", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+    label.new(bar_index, high, "TS S", style=label.style_label_down,
+              color=color.new(color.red, 0), textcolor=color.white, size=size.tiny)
     if i_show_levels
         entry = close
         sl    = high * (1 + i_sl_buffer_pct)
         risk  = sl - entry
         tp    = entry - risk * i_target_r
+        push_signal_viz(entry, sl, tp, false)
 
-        line.new(bar_index, entry, bar_index + i_level_extend, entry, color=color.new(color.yellow, 0), width=2, extend=extend.none)
-        line.new(bar_index, sl,    bar_index + i_level_extend, sl,    color=color.new(color.red, 0),    width=2, style=line.style_dashed)
-        line.new(bar_index, tp,    bar_index + i_level_extend, tp,    color=color.new(color.green, 0),  width=2, style=line.style_dashed)
+// ─── HTF bias arka plan (opsiyonel) ────────────────────────────────────────
 
-        label.new(bar_index + i_level_extend, entry, "Entry " + str.tostring(entry, format.mintick), style=label.style_label_left, color=color.new(color.yellow, 80), textcolor=color.yellow, size=size.tiny)
-        label.new(bar_index + i_level_extend, sl,    "SL "    + str.tostring(sl,    format.mintick), style=label.style_label_left, color=color.new(color.red, 80),    textcolor=color.red,    size=size.tiny)
-        label.new(bar_index + i_level_extend, tp,    "TP "    + str.tostring(tp,    format.mintick) + " (" + str.tostring(i_target_r, "#.#") + "R)", style=label.style_label_left, color=color.new(color.green, 80), textcolor=color.green, size=size.tiny)
-
-// ─── HTF bias visualization (gri arka plan) ───────────────────────────────
-
-bgcolor(i_use_htf and htf_bullish ? color.new(color.green, 95) : i_use_htf and htf_bearish ? color.new(color.red, 95) : na, title="HTF bias")
+bgcolor(i_show_htf_bg and i_use_htf and htf_bullish ? color.new(color.green, 97) :
+        i_show_htf_bg and i_use_htf and htf_bearish ? color.new(color.red,   97) : na,
+        title="HTF bias")
 
 // ─── Alerts ────────────────────────────────────────────────────────────────
 
-alertcondition(bullish_signal, title="Turtle Soup LONG",  message="TS LONG sinyali: {{ticker}} @ {{close}}")
-alertcondition(bearish_signal, title="Turtle Soup SHORT", message="TS SHORT sinyali: {{ticker}} @ {{close}}")
+alertcondition(bullish_signal, title="TS LONG",  message="TS LONG: {{ticker}} @ {{close}}")
+alertcondition(bearish_signal, title="TS SHORT", message="TS SHORT: {{ticker}} @ {{close}}")
