@@ -138,11 +138,49 @@ def parse(
 
 @app.command()
 def patterns(
-    trades: Path = typer.Argument(..., help="trades.jsonl"),
-    out: Path = typer.Option(Path("config/rules.yaml"), "--out"),
+    parsed_file: Path = typer.Argument(..., help="parse aşamasının çıktısı parsed.jsonl"),
+    out_report: Path = typer.Option(Path("reports/patterns.json"), "--report"),
+    out_trades: Path = typer.Option(Path("data/processed/trade_calls.jsonl"), "--trades"),
 ) -> None:
-    """Setup örüntülerini çıkar. (TODO)"""
-    raise typer.Exit(code=2)
+    """Parsed postlardan setup örüntülerini ve trade-call'ları çıkar."""
+    from mmxm.parsing.storage import read_parsed_jsonl
+    from mmxm.patterns import build_report
+    from mmxm.patterns.storage import write_report, write_trade_calls
+
+    records = list(read_parsed_jsonl(parsed_file))
+    if not records:
+        raise typer.BadParameter(f"{parsed_file} boş ya da bulunamadı")
+    logger.info("pattern mining n_records={}", len(records))
+
+    report, trade_calls = build_report(records)
+    write_report(out_report, report)
+    n_trades = write_trade_calls(out_trades, trade_calls)
+
+    logger.info(
+        "pattern mining bitti report={} trade_calls={} (n_trades={})",
+        out_report,
+        out_trades,
+        n_trades,
+    )
+    # Hızlı özet
+    logger.info("  trader profilleri ({}):", len(report.trader_profiles))
+    for prof in report.trader_profiles:
+        logger.info(
+            "    @{} posts={} trade_calls={} top_setups={}",
+            prof.handle,
+            prof.n_posts,
+            prof.n_trade_calls,
+            [s for s, _ in prof.top_concepts[:5]],
+        )
+    logger.info("  setup özetleri (top {}):", min(8, len(report.setup_summaries)))
+    for s in report.setup_summaries[:8]:
+        logger.info(
+            "    {} n={} avg_conf={:.2f} handles={}",
+            s.setup_name,
+            s.n_matches,
+            s.avg_confidence,
+            dict(s.handles),
+        )
 
 
 @app.command()
