@@ -1,16 +1,20 @@
-"""Parser'ın Anthropic API'sine ne gönderdiğini doğrula (gerçek çağrı yapmadan).
+"""Parser'ın Gemini API'sine ne gönderdiğini doğrula (gerçek çağrı yapmadan).
 
-Burası kritik: prompt caching, image block formatı, system prompt yapısı
-yanlışsa cache miss olur ve maliyet patlar. Yapısal doğrulama.
+Image fetch + content assembly + config forwarding yapısını kontrol eder.
 """
 
 from datetime import datetime, timezone
 
-import anthropic
+import httpx
 import pytest
 
 from mmxm.models import RawPost
-from mmxm.parsing.parser import _build_messages, parse_post
+from mmxm.parsing.parser import (
+    RateLimiter,
+    _build_contents,
+    _fetch_image,
+    parse_post,
+)
 from mmxm.parsing.prompts import SYSTEM_PROMPT, build_user_message
 from mmxm.parsing.schema import ParsedPost, PostType
 
@@ -35,85 +39,164 @@ def test_user_message_contains_metadata_and_text():
     assert "POST METADATA" in msg
 
 
-def test_build_messages_no_images():
-    msgs = _build_messages(_sample_post(), include_images=True)
-    assert len(msgs) == 1
-    assert msgs[0]["role"] == "user"
-    content = msgs[0]["content"]
-    assert len(content) == 1  # sadece text
-    assert content[0]["type"] == "text"
+def test_system_prompt_includes_ict_ontology_and_examples():
+    """Prompt'un kritik bölümleri yerli yerinde mi."""
+    assert "FVG" in SYSTEM_PROMPT
+    assert "turtle_soup" in SYSTEM_PROMPT
+    assert "amd" in SYSTEM_PROMPT
+    assert "post_type" in SYSTEM_PROMPT
+    # 5 worked example
+    assert "Örnek 1" in SYSTEM_PROMPT
+    assert "Örnek 5" in SYSTEM_PROMPT
 
 
-def test_build_messages_with_images():
+# --- _fetch_image (httpx MockTransport) ---
+
+
+def _img_transport(status: int = 200, content: bytes = b"\x89PNG fake", ctype: str = "image/png"):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, content=content, headers={"content-type": ctype})
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.asyncio
+async def test_fetch_image_returns_bytes_and_mime():
+    async with httpx.AsyncClient(transport=_img_transport()) as c:
+        result = await _fetch_image("https://pbs.twimg.com/media/x.png", c)
+    assert result is not None
+    data, mime = result
+    assert mime == "image/png"
+    assert data == b"\x89PNG fake"
+
+
+@pytest.mark.asyncio
+async def test_fetch_image_returns_none_on_404():
+    async with httpx.AsyncClient(transport=_img_transport(status=404)) as c:
+        result = await _fetch_image("https://pbs.twimg.com/media/x.png", c)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_image_returns_none_on_non_image_ctype():
+    async with httpx.AsyncClient(transport=_img_transport(ctype="text/html")) as c:
+        result = await _fetch_image("https://pbs.twimg.com/media/x.png", c)
+    assert result is None
+
+
+# --- _build_contents ---
+
+
+@pytest.mark.asyncio
+async def test_build_contents_no_images():
+    async with httpx.AsyncClient(transport=_img_transport()) as c:
+        parts = await _build_contents(_sample_post(), c, include_images=True)
+    assert len(parts) == 1
+    assert isinstance(parts[0], str)
+    assert "@example_trader" in parts[0]
+
+
+@pytest.mark.asyncio
+async def test_build_contents_with_images_downloads_and_inlines():
     urls = [
-        "https://pbs.twimg.com/media/HIIN1iEXUAATZTW.jpg",
-        "https://pbs.twimg.com/media/ANOTHER.png",
+        "https://pbs.twimg.com/media/A.jpg",
+        "https://pbs.twimg.com/media/B.jpg",
     ]
-    msgs = _build_messages(_sample_post(urls), include_images=True)
-    content = msgs[0]["content"]
-    assert len(content) == 3  # 1 text + 2 image
-    assert content[1] == {
-        "type": "image",
-        "source": {"type": "url", "url": urls[0]},
-    }
+    async with httpx.AsyncClient(transport=_img_transport()) as c:
+        parts = await _build_contents(_sample_post(urls), c, include_images=True)
+    assert len(parts) == 3  # 1 text + 2 image Part
+    # parts[1], parts[2] should be Part with inline_data
+    for p in parts[1:]:
+        assert hasattr(p, "inline_data") or hasattr(p, "model_dump")
 
 
-def test_build_messages_skips_video_thumbnails():
-    """Video thumbnail'lar grafik içermiyor — atlanmalı."""
+@pytest.mark.asyncio
+async def test_build_contents_skips_video_thumbnails():
     urls = [
-        "https://pbs.twimg.com/media/RealChart.jpg",
+        "https://pbs.twimg.com/media/Real.jpg",
         "https://pbs.twimg.com/amplify_video_thumb/12345/img/thumb.jpg",
-        "https://pbs.twimg.com/tweet_video_thumb/AB12.jpg",
+        "https://pbs.twimg.com/tweet_video_thumb/AB.jpg",
     ]
-    msgs = _build_messages(_sample_post(urls), include_images=True)
-    content = msgs[0]["content"]
-    # 1 text + 1 real image (videolar atlandı)
-    assert len(content) == 2
-    assert content[1]["source"]["url"] == urls[0]
+    async with httpx.AsyncClient(transport=_img_transport()) as c:
+        parts = await _build_contents(_sample_post(urls), c, include_images=True)
+    assert len(parts) == 2  # 1 text + 1 real image
 
 
-def test_no_images_flag_drops_all():
-    msgs = _build_messages(_sample_post(["https://pbs.twimg.com/media/A.jpg"]), include_images=False)
-    assert len(msgs[0]["content"]) == 1
-    assert msgs[0]["content"][0]["type"] == "text"
+@pytest.mark.asyncio
+async def test_build_contents_skips_failed_image_downloads():
+    """200 OK ama text/html — atlanmalı."""
+    urls = ["https://pbs.twimg.com/media/Broken.jpg"]
+    async with httpx.AsyncClient(
+        transport=_img_transport(ctype="text/html")
+    ) as c:
+        parts = await _build_contents(_sample_post(urls), c, include_images=True)
+    assert len(parts) == 1
 
 
-def test_system_prompt_is_long_enough_for_caching():
-    """Opus 4.7 prompt caching minimum 4096 token. Tahminen 1 token ≈ 3-4 karakter."""
-    # Yaklaşık alt sınır: ~12K karakter ≈ ~3-4K token. Türkçe biraz daha yoğun olabilir.
-    assert len(SYSTEM_PROMPT) >= 4000, (
-        f"system prompt çok kısa ({len(SYSTEM_PROMPT)} chars) — caching çalışmayabilir"
-    )
+@pytest.mark.asyncio
+async def test_no_images_flag_drops_all():
+    async with httpx.AsyncClient(transport=_img_transport()) as c:
+        parts = await _build_contents(
+            _sample_post(["https://pbs.twimg.com/media/A.jpg"]),
+            c,
+            include_images=False,
+        )
+    assert len(parts) == 1
+    assert isinstance(parts[0], str)
 
 
-class _FakeMessages:
+# --- RateLimiter ---
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_enforces_interval():
+    import time
+
+    limiter = RateLimiter(requests_per_minute=600)  # 10/sec = 0.1s aralık
+    t0 = time.monotonic()
+    for _ in range(3):
+        await limiter.acquire()
+    elapsed = time.monotonic() - t0
+    # 3 acquire → 2 interval bekler ≈ 0.2s minimum
+    assert elapsed >= 0.18
+
+
+# --- parse_post end-to-end with mocked client ---
+
+
+class _FakeAioModels:
     def __init__(self, parsed: ParsedPost):
         self.parsed = parsed
         self.calls: list[dict] = []
 
-    async def parse(self, **kwargs):
-        self.calls.append(kwargs)
+    async def generate_content(self, *, model, contents, config):
+        self.calls.append({"model": model, "contents": contents, "config": config})
 
         class _Usage:
-            input_tokens = 100
-            output_tokens = 50
-            cache_read_input_tokens = 0
-            cache_creation_input_tokens = 3000
+            prompt_token_count = 3000
+            thoughts_token_count = 500
+            candidates_token_count = 200
 
         class _Response:
-            usage = _Usage()
-            parsed_output = self.parsed
+            usage_metadata = _Usage()
+            parsed = self.parsed
+            text = '{"ok": true}'
 
         return _Response()
 
 
+class _FakeAio:
+    def __init__(self, parsed: ParsedPost):
+        self.models = _FakeAioModels(parsed)
+
+
 class _FakeClient:
     def __init__(self, parsed: ParsedPost):
-        self.messages = _FakeMessages(parsed)
+        self.aio = _FakeAio(parsed)
 
 
 @pytest.mark.asyncio
-async def test_parse_post_forwards_caching_and_thinking_config():
+async def test_parse_post_forwards_config():
     expected = ParsedPost(
         post_type=PostType.TRADE_CALL,
         language="tr",
@@ -121,33 +204,25 @@ async def test_parse_post_forwards_caching_and_thinking_config():
         confidence=0.9,
     )
     client = _FakeClient(expected)
-    result = await parse_post(_sample_post(), client)  # type: ignore[arg-type]
+    async with httpx.AsyncClient(transport=_img_transport()) as http:
+        result = await parse_post(_sample_post(), client, http_client=http)  # type: ignore[arg-type]
     assert result is expected
 
-    call = client.messages.calls[0]
-    # System prompt cache_control'lu mu?
-    assert call["system"][0]["cache_control"] == {"type": "ephemeral"}
-    # Adaptive thinking + effort=high?
-    assert call["thinking"] == {"type": "adaptive"}
-    assert call["output_config"] == {"effort": "high"}
-    # Pydantic output_format gitti mi?
-    assert call["output_format"] is ParsedPost
-    # Model default
-    assert call["model"] == "claude-opus-4-7"
+    call = client.aio.models.calls[0]
+    assert call["model"] == "gemini-2.5-flash"
+    cfg = call["config"]
+    assert cfg.system_instruction == SYSTEM_PROMPT
+    assert cfg.response_mime_type == "application/json"
+    assert cfg.response_schema is ParsedPost
+    assert cfg.thinking_config.thinking_budget == 1024
 
 
 @pytest.mark.asyncio
-async def test_parse_post_raises_on_api_error():
-    class _ErrorMessages:
-        async def parse(self, **kwargs):
-            raise anthropic.APIError(
-                "boom", request=None, body=None  # type: ignore[arg-type]
-            )
-
-    class _ErrClient:
-        messages = _ErrorMessages()
-
+async def test_parse_post_raises_when_schema_validation_fails():
+    """parsed=None → ParseError."""
     from mmxm.parsing.parser import ParseError
 
-    with pytest.raises(ParseError):
-        await parse_post(_sample_post(), _ErrClient())  # type: ignore[arg-type]
+    client = _FakeClient(None)  # type: ignore[arg-type]
+    async with httpx.AsyncClient(transport=_img_transport()) as http:
+        with pytest.raises(ParseError):
+            await parse_post(_sample_post(), client, http_client=http)  # type: ignore[arg-type]

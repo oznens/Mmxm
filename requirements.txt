@@ -6,7 +6,8 @@ tenacity>=8.2.3
 Scweet>=5.3
 
 # --- LLM-based parsing ---
-anthropic>=0.40.0
+# Gemini 2.5 Flash (ücretsiz tier, multimodal, Pydantic structured output).
+google-genai>=2.6.0
 pydantic>=2.7.0
 
 # --- Market data / backtest ---
