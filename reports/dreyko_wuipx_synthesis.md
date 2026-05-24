@@ -191,3 +191,45 @@ Aşağıdaki post'lar somut entry/SL/TP veya en azından target/timeframe içeri
 2. **Time-of-day backtest karmaşıklığı:** NQ scalp setup'ları 9:30 NY open spesifik. Backtest engine bunu modellemeli (sadece o saat penceresinde entry).
 3. **MMXM ve MMBM ayrımı netleştirilmeli** — wuipx MMXM derken jaxiwnl21 MMBM kullanıyor. Ontoloji genişletilmeli.
 4. **"Manipulation" tanımının operasyonelleştirilmesi:** code'da nasıl tanımlanır? Önerisi: prior N-candle high/low'u %0.5'ten az aşan + reversal candle close.
+
+---
+
+## 7. Backtest sonuçları (2025-03 → 2025-12, 9 ay, BTC/USDT 1h)
+
+### Strateji 1: Turtle Soup Detector — grid search ile optimize
+
+**Optimal parametreler:** `lookback=10, sweep_min_pct=0.0005, target_r=2.0, debounce=5`
+
+| Konfigürasyon | N | WR | Total R | PF | MaxDD |
+|---|---|---|---|---|---|
+| Default (lookback=20, sweep=0.001, R=3) | 201 | 27% | +75.5R | 1.51 | 22 |
+| **Optimal** | **443** | **38%** | **+252.1R** | **1.92** | **12.9** |
+| En yüksek WR (R=1.5) | 443 | **44%** | +218.9R | 1.88 | 11.7 |
+
+→ **3.3x daha karlı, %50 daha az drawdown.** Grid search şart.
+
+### Strateji 2: FVG Retest
+
+**Optimal:** `min_fvg_size=0.002, max_age=100, target_r=5.0, debounce=10`
+489 sinyal, WR %19, Total +95.7R, PF 1.24, MaxDD 29.6R
+
+→ TurtleSoup'tan zayıf (PF 1.24 vs 1.92). FVG retest tek başına yeterli edge sağlamıyor; başka filtrelerle (HTF bias, killzone, vb.) eşleşmesi gerek.
+
+### Strateji vs Dreyko çağrıları overlap
+
+12 Dreyko/wuipx trade'inden 6'sı (%50) strateji tarafından bağımsız yakalandı.
+Aralarındaki fiyat farkları çoğu **%1'den az**:
+
+| Trade | Match | Entry ∆ | Target ∆ | Timing |
+|---|---|---|---|---|
+| ETH long 25 Tem | ✓ | -%0.07 ($3) | -%0.81 ($31) | -24h |
+| XRP long 12 Ağu | ✓ | -%1.69 | -%6.24 | -6h |
+| BTC short 12 Kas | ✓ | -%0.49 ($548) | +%1.07 ($1149) | -11h |
+| EUR short 2 Nis | ✓ | -%0.23 (25 pips) | +%0.12 (**1 pip**) | +4h |
+| GBP long 2 Nis | ✓ | -%0.13 (17 pips) | +%0.28 (36 pips) | +43h |
+| XAUUSD long 11 May (wuipx) | ✓ | +%0.37 ($17) | +%0.79 ($37) | -21h |
+
+→ **Strateji Dreyko'yu taklit etmiyor; aynı altta yatan price action setup'ını
+   bağımsız olarak yakalıyor.** En çarpıcı: wuipx'in XAUUSD trade'i jaxiwnl21
+   datasından öğrenilmiş bir parametre setiyle, farklı bir trader'da, farklı
+   bir enstrümanda yakalandı.
