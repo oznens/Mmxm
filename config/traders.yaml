@@ -1,0 +1,15 @@
+# Takip edilen X trader'ları.
+# Şema: src/mmxm/scraping/base.py:TraderConfig
+
+traders:
+  - handle: jaxiwnl21
+    tags: []
+    include_replies: false
+    since: "2024-01-01"
+    notes: ""
+
+  - handle: wuipx
+    tags: []
+    include_replies: false
+    since: "2024-01-01"
+    notes: ""

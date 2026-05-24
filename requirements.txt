@@ -1,7 +1,9 @@
 # --- HTTP / scraping ---
-# Nitter RSS feed'lerini stdlib xml.etree ile parse ediyoruz — BeautifulSoup/lxml gerekmiyor.
 httpx>=0.27.0
 tenacity>=8.2.3
+
+# X scrape backend (cookie tabanlı GraphQL).
+Scweet>=5.3
 
 # --- LLM-based parsing ---
 anthropic>=0.40.0

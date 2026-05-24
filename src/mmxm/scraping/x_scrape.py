@@ -1,108 +1,63 @@
-"""Nitter RSS tabanlı ücretsiz X scrape backend'i.
+"""Scweet (https://github.com/Altimis/Scweet) tabanlı X scrape backend.
 
-Yaklaşım:
-- Public bir Nitter instance'ına `{instance}/{handle}/rss` GET et.
-- Dönen RSS XML'ini stdlib `xml.etree` ile parse et.
-- Item'lardan `RawPost` üret. Retweet ve yanıtları (isteğe göre) filtrele.
-- Birden fazla instance verilirse sırayla dene (rate-limit / 404 / 5xx
-  durumunda bir sonrakine geç).
+Auth modeli: X'in `auth_token` cookie'si yetiyor — `X_AUTH_TOKEN` env'i veya
+constructor argümanı ile geçilir. Bir throwaway X hesabıyla DevTools üzerinden
+çıkarılabiliyor. Login akışı yok.
 
-Notlar:
-- Nitter public instance'lar yıllar içinde sık sık kapanıyor / rate-limit'leniyor.
-  Çalışan instance listesi `NITTER_INSTANCES` env değişkeniyle ya da CLI flag'iyle
-  geçilebiliyor.
-- RSS feed yalnızca son ~20 tweet'i veriyor; derin arşiv için cursor desteği yok.
-  Tarihsel veri gerekirse twscrape benzeri bir backend'e geçilecek.
+Avantajları (Nitter RSS'e göre):
+- Tarihsel arşiv: `since`/`until` ile geriye doğru ~aylar/yıllar çekilebilir.
+- Resmi GraphQL endpoint'leri kullanılıyor → metin, medya, sayaçlar tam.
+- Reply filtresi GraphQL düzeyinde (`tweet_type="exclude_replies"`).
+
+Sınırlar:
+- Hesap günlük kotası var; `limit` mutlaka set edilmeli.
+- Scweet auth_token cookie'si X hesabına bağlı; banlanırsa yeni hesap gerekir.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
-from html import unescape
-from typing import Optional
-from xml.etree import ElementTree as ET
+from typing import Any, Optional
 
-import httpx
 from loguru import logger
-from tenacity import (
-    AsyncRetrying,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
 
 from mmxm.models import RawPost
 from mmxm.scraping.base import ScraperBackend
 
-_DC_NS = "{http://purl.org/dc/elements/1.1/}"
-_STATUS_ID_RE = re.compile(r"/status/(\d+)")
-_TAG_RE = re.compile(r"<[^>]+>")
+_TWITTER_TS_FMT = "%a %b %d %H:%M:%S %z %Y"  # ör. "Wed Oct 10 20:19:24 +0000 2018"
 
 
-class NitterUnavailable(Exception):
-    """Tüm denenen instance'lar başarısız oldu."""
-
-
-class NitterScrapeBackend(ScraperBackend):
-    name = "nitter_rss"
+class ScweetBackend(ScraperBackend):
+    name = "scweet"
 
     def __init__(
         self,
-        instances: list[str],
-        timeout: float = 15.0,
-        user_agent: str = "Mozilla/5.0 (mmxm-research/0.0.1)",
+        auth_token: Optional[str] = None,
+        *,
+        db_path: str = "data/scweet_state.db",
+        client: Any = None,
     ) -> None:
-        if not instances:
-            raise ValueError(
-                "En az bir Nitter instance gerekli. Örnek: 'https://nitter.net'. "
-                "NITTER_INSTANCES env değişkenine virgülle ayrılmış URL listesi gir."
-            )
-        self.instances = [u.rstrip("/") for u in instances]
-        self._client = httpx.AsyncClient(
-            timeout=timeout,
-            headers={"User-Agent": user_agent, "Accept": "application/rss+xml, */*"},
-            follow_redirects=True,
-        )
-
-    async def close(self) -> None:
-        await self._client.aclose()
-
-    async def _fetch_rss(self, handle: str) -> str:
-        last_err: Optional[Exception] = None
-        for instance in self.instances:
-            url = f"{instance}/{handle}/rss"
-            try:
-                async for attempt in AsyncRetrying(
-                    stop=stop_after_attempt(3),
-                    wait=wait_exponential(multiplier=1, min=1, max=8),
-                    retry=retry_if_exception_type(httpx.TransportError),
-                    reraise=True,
-                ):
-                    with attempt:
-                        resp = await self._client.get(url)
-                if resp.status_code == 200 and resp.text.lstrip().startswith("<?xml"):
-                    logger.debug("nitter ok handle={} instance={}", handle, instance)
-                    return resp.text
-                logger.warning(
-                    "nitter başarısız handle={} instance={} status={} body_prefix={!r}",
-                    handle,
-                    instance,
-                    resp.status_code,
-                    resp.text[:120],
+        """
+        Args:
+            auth_token: X auth_token cookie. Yoksa `client` enjekte edilmeli.
+            db_path: Scweet'in resume/queue state'i için sqlite dosyası.
+            client: Test için Scweet client mock'u (asearch metoduna sahip olmalı).
+        """
+        if client is not None:
+            self._client = client
+        else:
+            if not auth_token:
+                raise ValueError(
+                    "Scweet için auth_token gerekli. X_AUTH_TOKEN env'ini doldur "
+                    "veya --auth-token flag'i ile geç."
                 )
-                last_err = NitterUnavailable(
-                    f"{instance} -> HTTP {resp.status_code}"
-                )
-            except httpx.HTTPError as e:
-                logger.warning("nitter hata handle={} instance={} err={}", handle, instance, e)
-                last_err = e
+            from Scweet import Scweet
 
-        raise NitterUnavailable(
-            f"Tüm Nitter instance'ları başarısız: {self.instances}. Son hata: {last_err}"
-        )
+            from pathlib import Path
+
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+            self._client = Scweet(auth_token=auth_token, db_path=db_path)
 
     async def fetch_user_posts(
         self,
@@ -111,90 +66,75 @@ class NitterScrapeBackend(ScraperBackend):
         include_replies: bool = False,
         limit: Optional[int] = None,
     ) -> AsyncIterator[RawPost]:
-        xml_text = await self._fetch_rss(handle)
-        count = 0
-        for post in parse_nitter_rss(xml_text, handle, include_replies=include_replies):
-            if since is not None and post.created_at < _aware(since):
-                continue
-            yield post
-            count += 1
-            if limit is not None and count >= limit:
-                return
+        handle = handle.lstrip("@").lower()
+
+        kwargs: dict[str, Any] = {"from_users": [handle]}
+        if since is not None:
+            kwargs["since"] = since.date().isoformat()
+        if limit is not None:
+            kwargs["limit"] = limit
+        if not include_replies:
+            kwargs["tweet_type"] = "exclude_replies"
+
+        logger.info("scweet asearch handle={} kwargs={}", handle, kwargs)
+        tweets = await self._client.asearch("", **kwargs)
+        logger.info("scweet bitti handle={} n_raw={}", handle, len(tweets))
+
+        for t in tweets:
+            post = scweet_dict_to_raw_post(t, handle)
+            if post is not None:
+                yield post
 
 
-def _aware(dt: datetime) -> datetime:
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-
-
-def _clean_html(s: str) -> str:
-    return unescape(_TAG_RE.sub("", s)).strip()
-
-
-def _extract_status_id(url: str) -> Optional[str]:
-    m = _STATUS_ID_RE.search(url)
-    return m.group(1) if m else None
-
-
-def parse_nitter_rss(
-    xml_text: str,
-    requested_handle: str,
-    *,
-    include_replies: bool = False,
-) -> list[RawPost]:
-    """Nitter RSS XML'ini RawPost listesine çevir.
-
-    Filtreleme kuralları:
-    - Retweet: `dc:creator` istenen handle'dan farklıysa atla.
-    - Reply: `title` "R to @..." ile başlıyorsa, `include_replies` False ise atla.
-    """
-    root = ET.fromstring(xml_text)
-    channel = root.find("channel")
-    if channel is None:
-        return []
-
-    handle_lc = requested_handle.lstrip("@").lower()
-    posts: list[RawPost] = []
-
-    for item in channel.findall("item"):
-        creator_el = item.find(f"{_DC_NS}creator")
-        creator = (creator_el.text or "").lstrip("@").lower() if creator_el is not None else ""
-        if creator and creator != handle_lc:
-            # Retweet / başkasının postu — atla.
-            continue
-
-        title_raw = (item.findtext("title") or "").strip()
-        is_reply = title_raw.startswith("R to @")
-        if is_reply and not include_replies:
-            continue
-
-        link = (item.findtext("link") or "").strip()
-        guid = (item.findtext("guid") or "").strip()
-        status_id = _extract_status_id(link) or _extract_status_id(guid)
-        if not status_id:
-            continue
-
-        description = item.findtext("description") or ""
-        text = _clean_html(description) or _clean_html(title_raw)
-
-        pub_date_str = item.findtext("pubDate")
+def _parse_twitter_timestamp(ts: Any) -> Optional[datetime]:
+    """X'in 'Wed Oct 10 20:19:24 +0000 2018' formatını datetime'a çevir."""
+    if not isinstance(ts, str) or not ts:
+        return None
+    try:
+        return datetime.strptime(ts, _TWITTER_TS_FMT)
+    except ValueError:
         try:
-            created_at = parsedate_to_datetime(pub_date_str) if pub_date_str else None
-        except (TypeError, ValueError):
-            created_at = None
-        if created_at is None:
-            continue
-        created_at = _aware(created_at)
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            return None
 
-        posts.append(
-            RawPost(
-                post_id=status_id,
-                handle=handle_lc,
-                text=text,
-                created_at=created_at,
-                url=link or None,
-                is_reply=is_reply,
-                raw={"title": title_raw, "creator": creator},
-            )
-        )
 
-    return posts
+def scweet_dict_to_raw_post(d: dict, requested_handle: str) -> Optional[RawPost]:
+    """Bir Scweet TweetRecord dict'ini RawPost'a çevir. None dönerse atla."""
+    tweet_id = d.get("tweet_id")
+    if not tweet_id:
+        return None
+
+    user = d.get("user") or {}
+    handle = (user.get("screen_name") or requested_handle).lstrip("@").lower()
+
+    text = d.get("text") or d.get("embedded_text") or ""
+
+    created_at = _parse_twitter_timestamp(d.get("timestamp"))
+    if created_at is None:
+        return None
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+
+    legacy = ((d.get("raw") or {}).get("legacy")) or {}
+    in_reply_to = legacy.get("in_reply_to_status_id_str")
+    is_reply = bool(in_reply_to)
+
+    media = d.get("media") or {}
+    media_urls = list(media.get("image_links") or [])
+
+    return RawPost(
+        post_id=str(tweet_id),
+        handle=handle,
+        text=text,
+        created_at=created_at,
+        url=d.get("tweet_url"),
+        is_reply=is_reply,
+        in_reply_to=in_reply_to,
+        media_urls=media_urls,
+        raw={
+            "likes": d.get("likes"),
+            "retweets": d.get("retweets"),
+            "comments": d.get("comments"),
+        },
+    )

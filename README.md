@@ -43,11 +43,12 @@ cp .env.example .env  # değerleri doldur
 ## CLI
 
 ```bash
-# 1. Scrape — belirli trader'ların son N tweet'i (Nitter RSS, ücretsiz)
+# 1. Scrape — belirli trader'ların timeline'ı (Scweet, cookie tabanlı)
+#    X_AUTH_TOKEN env'ini doldur veya --auth-token ver.
 python -m mmxm scrape \
     --traders config/traders.yaml \
-    --nitter https://nitter.net,https://nitter.privacydev.net \
-    --since 2024-01-01
+    --since 2024-01-01 \
+    --limit 500
 
 # 2. Parse — ham postlardan structured trade çıkar
 python -m mmxm parse data/raw/*.jsonl --out data/processed/trades.jsonl
@@ -77,25 +78,33 @@ tests/
 data/                    # gitignore (raw / processed / cache)
 ```
 
-## Veri kaynağı kararı
+## Veri kaynağı
 
-Şu an **ücretsiz Nitter RSS** backend'i aktif (`src/mmxm/scraping/x_scrape.py`).
+[**Scweet**](https://github.com/Altimis/Scweet) (`src/mmxm/scraping/x_scrape.py:ScweetBackend`).
 
-- Auth gerekmiyor. `NITTER_INSTANCES` env'i veya `--nitter` flag'iyle bir veya
-  daha fazla instance veriyorsun; ilki başarısız olursa sıradakine geçiliyor.
-- RSS feed her trader için **yalnızca son ~20 tweet'i** veriyor — tarihsel arşiv
-  bu yolla mümkün değil. Derin geçmiş gerekirse `twscrape` benzeri bir backend
-  eklenmesi gerekecek (cookie tabanlı, throwaway hesap).
-- Public Nitter instance'larının çalışırlık durumu sık değişiyor; canlı liste:
-  https://github.com/zedeus/nitter/wiki/Instances
+- Auth: bir X hesabına login olup DevTools > Cookies > `auth_token` değerini
+  `X_AUTH_TOKEN` env'ine koy. Throwaway hesap önerilir (banlanma riski var).
+- Scweet GraphQL endpoint'lerini kullandığı için tarihsel arşiv erişimi var —
+  `--since` ile aylar/yıllar geriye gidilebilir.
+- Reply filtresi GraphQL düzeyinde (`tweet_type="exclude_replies"`); `include_replies`
+  flag'i ile dahil edilebilir.
+- Günlük kota: `--limit` set etmek şart, yoksa hesap kotası tükenir.
 
 `XApiBackend` stub olarak duruyor — resmi API'ye geçilirse `--source api`.
 
+## Grafik (chart) okuma
+
+Trader'ların büyük çoğunluğu setup'ı **TradingView ekran görüntüsü** olarak
+paylaşıyor. Scweet `media.image_links`'i veriyor, biz `RawPost.media_urls` olarak
+saklıyoruz. LLM parse aşamasında bu görseller Claude API'ye multimodal input
+olarak (image block) gönderilecek; metin + grafik birlikte değerlendirilince
+entry/stop/target seviyeleri ve indikatörler chart'tan da çıkarılabilir.
+
 ## Açık kararlar (sonraki session)
 
-- [ ] Takip edilecek trader listesi (`config/traders.yaml`)
+- [x] Takip edilecek trader listesi → `jaxiwnl21`, `wuipx` (`config/traders.yaml`)
 - [ ] LLM parse şemasının final hali (TP1/TP2/TP3, leverage, invalidation vs.)
-- [ ] Tarihsel veri ihtiyacı doğrulanırsa twscrape backend'i
+- [ ] Görsel + metin için Claude prompt tasarımı
 
 ## Lisans
 
