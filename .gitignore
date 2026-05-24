@@ -83,3 +83,4 @@ logs/
 # Backtest output
 backtest_results/
 reports/
+!reports/*.md
