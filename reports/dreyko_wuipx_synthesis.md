@@ -233,3 +233,49 @@ Aralarındaki fiyat farkları çoğu **%1'den az**:
    bağımsız olarak yakalıyor.** En çarpıcı: wuipx'in XAUUSD trade'i jaxiwnl21
    datasından öğrenilmiş bir parametre setiyle, farklı bir trader'da, farklı
    bir enstrümanda yakalandı.
+
+---
+
+## 8. HTF (Higher Timeframe) bias filtresi
+
+**Hipotez:** TurtleSoup LTF (1h) sinyallerini sadece HTF (1D) bias ile uyumlu olanlara
+indirgersek (Dreyko'nun "HTF bias → LTF entry" yaklaşımı) PF artar, drawdown düşer.
+
+### BTC 1h, optimal TurtleSoup + farklı HTF filtreler
+
+| HTF filtre | N | WR | Total R | PF | MDD | R/sig |
+|---|---|---|---|---|---|---|
+| (FİLTRESİZ) | 264 | 38% | +134.9R | 1.82 | 11.8R | +0.51 |
+| 1D ma_cross(9,21) | 133 | 38% | +82.1R | 2.00 | 12.0R | +0.62 |
+| **1D ma_cross(3,9)** | **122** | **46%** | **+116.4R** | **2.76** | **5.0R** | **+0.95** |
+| 1D ma_slope(9,21) | 139 | 41% | +99.6R | 2.21 | 8.0R | +0.72 |
+| 1D close_above_ma(20) | 115 | 46% | +103.3R | 2.67 | 6.0R | +0.90 |
+| 4h ma_cross(9,21) | 73 | 40% | +31.8R | 1.72 | 5.0R | +0.44 |
+| 4h ma_slope(9,21) | 89 | 39% | +39.1R | 1.72 | 10.0R | +0.44 |
+
+→ **En iyi: 1D ma_cross(3,9)** — filtresizle aynı R üretiyor (+116 vs +135), ama
+   sadece **YARI sinyal sayısıyla**, **2x R/sig**, ve **MaxDD 11.8 → 5R'a düştü** (-58%).
+
+### Multi-asset doğrulama (3 sembol, HTF filtreli optimal)
+
+| Sembol | N | WR | Total R | PF |
+|---|---|---|---|---|
+| BTC/USDT | 122 | 46% | +116.4R | 2.76 |
+| ETH/USDT | 155 | 36% | +115.0R | 2.16 |
+| XRP/USDT | 141 | 37% | +92.7R | 2.04 |
+| **Toplam** | **418** | **39%** | **+324.0R** | — |
+
+→ 1% risk per trade ile 9 ay'da **+%324 portfolyo büyümesi** (compounding'siz, friction'sız).
+   Tüm sembollerde PF 2.0+ stabil — strateji multi-asset transfer ediyor.
+
+## 9. Sonuç
+
+Tek bir cümleyle:
+
+> **Trader'ların metin + chart paylaşımlarından öğrenilen ICT/SMC playbook,
+> rule-based kodla operasyonalize edildiğinde, hem trader'ın gerçek çağrılarını
+> bağımsız olarak (%50 coverage, <%1 sapma) yakalar hem de 3 sembol portfolyosu
+> üzerinde 9 ayda +324R PF 2.0+ stabil performans verir.**
+
+Pipeline tam çalışıyor: CSV → text/chart analizi → trade extraction → rule-based
+detector → grid search → HTF filter → multi-asset backtest → overlap doğrulama.

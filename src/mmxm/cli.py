@@ -246,6 +246,10 @@ def scan_strategy(
     exchange: str = typer.Option("yahoo", "--exchange"),
     target_r: float = typer.Option(3.0, "--target-r"),
     lookback: int = typer.Option(20, "--lookback"),
+    htf_tf: Optional[str] = typer.Option(None, "--htf-tf", help="HTF bias filtresi için TF (ör. 1d). Boşsa HTF filtre yok."),
+    htf_method: str = typer.Option("ma_cross", "--htf-method", help="ma_cross | ma_slope | close_above_ma"),
+    htf_fast: int = typer.Option(9, "--htf-fast"),
+    htf_slow: int = typer.Option(21, "--htf-slow"),
 ) -> None:
     """OHLCV indir, strateji ile tara, sinyalleri TradeCallRecord JSONL'e yaz."""
     from datetime import datetime as _dt
@@ -278,7 +282,27 @@ def scan_strategy(
         kwargs["target_r"] = target_r
     strategy = get_strategy(strategy_name, **kwargs)
     signals = strategy.scan(symbol, ohlcv)
-    logger.info("sinyal sayısı: {}", len(signals))
+    logger.info("ham sinyal sayısı: {}", len(signals))
+
+    # HTF bias filtresi (opsiyonel)
+    if htf_tf:
+        from mmxm.strategies.htf_filter import filter_signals_by_htf_bias
+        # HTF data — daha geniş aralık çek (slow MA için yeterli geçmiş)
+        from datetime import timedelta as _td
+        htf_since = since - _td(days=90)  # 90 gün ekstra pad
+        htf_ohlcv = fetch_ohlcv(symbol, htf_tf, since=htf_since, until=until, exchange_id=exchange)
+        if htf_ohlcv.empty:
+            logger.warning("HTF data boş, filtre atlanıyor")
+        else:
+            before = len(signals)
+            signals = filter_signals_by_htf_bias(
+                signals, htf_ohlcv, method=htf_method,
+                fast=htf_fast, slow=htf_slow,
+            )
+            logger.info(
+                "HTF filtre ({} {}, fast={}, slow={}): {} → {} sinyal",
+                htf_tf, htf_method, htf_fast, htf_slow, before, len(signals),
+            )
 
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8") as fh:
