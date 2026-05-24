@@ -1,0 +1,22 @@
+# Takip edilecek X (Twitter) trader'ları.
+# Bu dosyayı `traders.yaml` olarak kopyalayıp doldur.
+#
+# Alanlar:
+#   handle:       X kullanıcı adı (@ olmadan)
+#   tags:         strateji etiketleri (filtreleme için)
+#   include_replies:  yanıt tweet'leri de çekilsin mi
+#   since:        ISO tarih, bu tarihten önceki tweet'ler atlanır
+#   notes:        serbest not
+
+traders:
+  - handle: example_trader_1
+    tags: [scalp, futures, btc]
+    include_replies: false
+    since: "2024-01-01"
+    notes: "Genelde 15m-1h timeframe, RSI + S/R bazlı setup"
+
+  - handle: example_trader_2
+    tags: [swing, alts]
+    include_replies: false
+    since: "2024-01-01"
+    notes: "Haftalık alt thread'lerinde TP1/TP2/TP3 veriyor"
