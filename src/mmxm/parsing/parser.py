@@ -31,9 +31,10 @@ from mmxm.models import RawPost
 from mmxm.parsing.prompts import SYSTEM_PROMPT, build_user_message
 from mmxm.parsing.schema import ParsedPost
 
-DEFAULT_MODEL = "gemini-2.5-flash"
-DEFAULT_RPM = 4  # Gemini 2.5 Flash free tier 5 RPM; güvenlik payıyla 4
+DEFAULT_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_RPM = 10  # Flash-Lite free tier 15 RPM; güvenlik payıyla 10
 MAX_RETRIES_ON_429 = 3
+MAX_RETRIES_ON_5XX = 2  # 503 UNAVAILABLE vb. transient server hataları
 
 
 class ParseError(Exception):
@@ -155,7 +156,10 @@ async def parse_post(
 
         response = None
         last_err: Optional[Exception] = None
-        for attempt in range(MAX_RETRIES_ON_429 + 1):
+        retries_429 = 0
+        retries_5xx = 0
+        max_attempts = 1 + MAX_RETRIES_ON_429 + MAX_RETRIES_ON_5XX  # toplam üst sınır
+        for attempt in range(max_attempts):
             if rate_limiter is not None:
                 await rate_limiter.acquire()
             try:
@@ -167,19 +171,32 @@ async def parse_post(
                 break
             except genai_errors.APIError as e:
                 last_err = e
-                if e.code == 429 and attempt < MAX_RETRIES_ON_429:
-                    delay = _extract_retry_delay_seconds(e) or (5.0 * (attempt + 1))
-                    # Limiter'ı sıfırlamadan; sleep'in akıbetinden sonra limiter zaten cooldown'ı yönetiyor.
+                if e.code == 429 and retries_429 < MAX_RETRIES_ON_429:
+                    retries_429 += 1
+                    delay = _extract_retry_delay_seconds(e) or (5.0 * retries_429)
                     logger.info(
-                        "429 rate limit id={} attempt={}/{}, {:.1f}s bekleniyor",
+                        "429 rate limit id={} retry={}/{}, {:.1f}s bekleniyor",
                         post.post_id,
-                        attempt + 1,
+                        retries_429,
                         MAX_RETRIES_ON_429,
                         delay,
                     )
                     await asyncio.sleep(delay)
                     continue
-                # Diğer hatalar veya retry hakkı bitti.
+                if 500 <= e.code < 600 and retries_5xx < MAX_RETRIES_ON_5XX:
+                    retries_5xx += 1
+                    delay = 5.0 * (2 ** (retries_5xx - 1))  # 5s, 10s exponential
+                    logger.info(
+                        "{} server hatası id={} retry={}/{}, {:.1f}s bekleniyor",
+                        e.code,
+                        post.post_id,
+                        retries_5xx,
+                        MAX_RETRIES_ON_5XX,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                # Retryable değil ya da hak bitti
                 raise ParseError(post.post_id, e, summary=f"{e.code} {e.status}") from e
 
         if response is None:

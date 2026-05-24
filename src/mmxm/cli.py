@@ -65,9 +65,9 @@ def scrape(
 def parse(
     inputs: list[Path] = typer.Argument(..., help="raw JSONL dosyaları"),
     out: Path = typer.Option(Path("data/processed/parsed.jsonl"), "--out"),
-    model: str = typer.Option("gemini-2.5-flash", "--model"),
+    model: str = typer.Option("gemini-2.5-flash-lite", "--model"),
     concurrency: int = typer.Option(2, "--concurrency", help="paralel parse sayısı"),
-    rpm: int = typer.Option(4, "--rpm", help="dakika başına istek üst sınırı (Gemini 2.5 Flash free tier 5)"),
+    rpm: int = typer.Option(10, "--rpm", help="dakika başına istek üst sınırı (Flash-Lite free tier 15)"),
     limit: Optional[int] = typer.Option(None, "--limit", help="ilk N posta sınırla"),
     no_images: bool = typer.Option(False, "--no-images", help="grafikleri yollama"),
     resume: bool = typer.Option(

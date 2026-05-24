@@ -209,7 +209,7 @@ async def test_parse_post_forwards_config():
     assert result is expected
 
     call = client.aio.models.calls[0]
-    assert call["model"] == "gemini-2.5-flash"
+    assert call["model"] == "gemini-2.5-flash-lite"
     cfg = call["config"]
     assert cfg.system_instruction == SYSTEM_PROMPT
     assert cfg.response_mime_type == "application/json"
