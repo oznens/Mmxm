@@ -1,15 +1,15 @@
 // @version=6
 // Mmxm Turtle Soup Detector — Dreyko / wuipx tarzı ICT/SMC setup
 //
-// Sinyal yasam dongusu:
-//   - Sinyal firdiginde: entry/SL/TP cizgileri olusur
-//   - Aktifken (TP/SL hit olmamis): cizgiler her bar guncel bara uzar,
-//     etiket "+1.23R" gibi live update
-//   - TP veya SL hit olunca: cizgi orada donar, etiket sonuc gosterir
-//   - FIFO: en fazla N gorunur sinyal (eski olanlar silinir)
-//   - YAS TEMIZLIGI: M bardan eski sinyaller otomatik silinir
-//     (Onceden BTC 90k iken atilan eski sinyaller, fiyat 76k'ya
-//      dustugunde grafigi kirletmesin)
+// Görsel davranis:
+//   - Her sinyal: bar uzerine TS L / TS S marker (SABIT, o bara ankor)
+//   - Entry/SL/TP cizgileri: sinyal barindan baslar, SAGA UZAR
+//   - Cizgiler TP veya SL hit oluncaya kadar uzar, hit'te DURUR
+//   - Etiketler cizginin sonunda (sinyal+15 bar) SABIT, hareket etmez
+//   - Sonuc etiketi (TP/SL hit) hit oldugu barda gosterilir
+//
+// Tum etiketler/markerlar fiyat cubugu pozisyonuna sabit, scroll/zoom'da
+// kayan obje yok — TradingView'in dogal davranisi.
 
 indicator("Mmxm Turtle Soup Detector", shorttitle="TS", overlay=true,
          max_lines_count=500, max_labels_count=500, max_boxes_count=500)
@@ -32,9 +32,8 @@ i_htf_slow = input.int(9, "Slow MA", minval=2, group=g_htf)
 
 g_viz = "Görsel"
 i_show_levels = input.bool(true, "Entry/SL/TP çizgileri", group=g_viz)
-i_max_visible = input.int(3,     "Görünür son N sinyal",  minval=1, maxval=20, group=g_viz)
-i_max_age_bars= input.int(150,   "Maks yaş (bar)",        minval=20, group=g_viz,
-                          tooltip="Bu kadar bardan eski sinyaller otomatik silinir (grafik temiz kalır)")
+i_max_visible = input.int(5,     "Görünür son N sinyal",  minval=1, maxval=30, group=g_viz)
+i_max_age_bars= input.int(300,   "Maks yaş (bar)",        minval=20, group=g_viz)
 i_show_swing  = input.bool(false,"Swing high/low yatay çizgi", group=g_viz)
 i_show_htf_bg = input.bool(false,"HTF bias arka plan",        group=g_viz)
 i_dim_closed  = input.bool(true, "Kapanmış sinyalleri soluk yap", group=g_viz)
@@ -67,7 +66,7 @@ can_signal = (bar_index - last_signal_bar) >= i_debounce_bars
 bullish_signal = bullish_ts and allow_long  and can_signal
 bearish_signal = bearish_ts and allow_short and can_signal
 
-// ─── Active signal tracking arrays ─────────────────────────────────────────
+// ─── Active signal tracking ────────────────────────────────────────────────
 
 var array<int>   sig_bar      = array.new<int>()
 var array<bool>  sig_is_long  = array.new<bool>()
@@ -78,15 +77,18 @@ var array<bool>  sig_closed   = array.new<bool>()
 var array<line>  sig_le       = array.new<line>()
 var array<line>  sig_ls       = array.new<line>()
 var array<line>  sig_lt       = array.new<line>()
-var array<label> sig_lab      = array.new<label>()
+var array<label> sig_lab_e    = array.new<label>()
+var array<label> sig_lab_s    = array.new<label>()
+var array<label> sig_lab_t    = array.new<label>()
 var array<label> sig_marker   = array.new<label>()
 
-// ── Helper: index'teki sinyali ve tüm görsellerini sil
 delete_signal(int idx) =>
     line.delete(array.get(sig_le, idx))
     line.delete(array.get(sig_ls, idx))
     line.delete(array.get(sig_lt, idx))
-    label.delete(array.get(sig_lab, idx))
+    label.delete(array.get(sig_lab_e, idx))
+    label.delete(array.get(sig_lab_s, idx))
+    label.delete(array.get(sig_lab_t, idx))
     label.delete(array.get(sig_marker, idx))
     array.remove(sig_bar, idx)
     array.remove(sig_is_long, idx)
@@ -97,11 +99,13 @@ delete_signal(int idx) =>
     array.remove(sig_le, idx)
     array.remove(sig_ls, idx)
     array.remove(sig_lt, idx)
-    array.remove(sig_lab, idx)
+    array.remove(sig_lab_e, idx)
+    array.remove(sig_lab_s, idx)
+    array.remove(sig_lab_t, idx)
     array.remove(sig_marker, idx)
 
-// ── Her bar: yaş kontrolü + aktif sinyalleri güncelle
-// (en eski yaşlı olanları öncelikle sil)
+// ── Her bar: yaş temizliği + aktif sinyal hit kontrolü ────────────────────
+
 i_age = 0
 while i_age < array.size(sig_bar)
     if bar_index - array.get(sig_bar, i_age) > i_max_age_bars
@@ -114,7 +118,6 @@ if n_sigs > 0
     for i = 0 to n_sigs - 1
         if not array.get(sig_closed, i)
             is_long = array.get(sig_is_long, i)
-            entry   = array.get(sig_entry, i)
             sl_v    = array.get(sig_sl, i)
             tp_v    = array.get(sig_tp, i)
 
@@ -124,63 +127,61 @@ if n_sigs > 0
             le = array.get(sig_le, i)
             ls = array.get(sig_ls, i)
             lt = array.get(sig_lt, i)
-            lab = array.get(sig_lab, i)
 
-            // Aktif: çizgileri current bar'a uzat, etiket sağ uçta
+            // SADECE cizgileri uzat (etiketler SABIT, fiyat barlarinda)
             line.set_x2(le, bar_index)
             line.set_x2(ls, bar_index)
             line.set_x2(lt, bar_index)
-            label.set_x(lab, bar_index)
-            label.set_y(lab, tp_v)
 
-            if hit_sl and hit_tp
-                array.set(sig_closed, i, true)
-                if i_dim_closed
-                    line.set_color(le, color.new(color.yellow, 70))
-                    line.set_color(ls, color.new(color.red, 30))
-                    line.set_color(lt, color.new(color.green, 70))
-                label.set_text(lab, "✗ SL (same bar)")
-                label.set_color(lab, color.new(color.red, 30))
-                label.set_textcolor(lab, color.white)
-            else if hit_sl
+            if hit_sl
                 array.set(sig_closed, i, true)
                 if i_dim_closed
                     line.set_color(le, color.new(color.yellow, 70))
                     line.set_color(lt, color.new(color.green, 70))
-                label.set_text(lab, "✗ SL " + str.tostring(sl_v, format.mintick))
-                label.set_color(lab, color.new(color.red, 20))
-                label.set_textcolor(lab, color.white)
-                label.set_y(lab, sl_v)
+                // Hit etiketi: o bar uzerine kucuk X
+                label.new(bar_index, sl_v, "✗", style=label.style_label_left,
+                         color=color.new(color.red, 0), textcolor=color.white,
+                         size=size.tiny)
             else if hit_tp
                 array.set(sig_closed, i, true)
                 if i_dim_closed
                     line.set_color(le, color.new(color.yellow, 70))
                     line.set_color(ls, color.new(color.red, 70))
-                label.set_text(lab, "✓ TP +" + str.tostring(i_target_r, "#.#") + "R")
-                label.set_color(lab, color.new(color.green, 20))
-                label.set_textcolor(lab, color.white)
-                label.set_y(lab, tp_v)
-            else
-                r_now = is_long ? (close - entry) / (entry - sl_v) : (entry - close) / (sl_v - entry)
-                label.set_text(lab, str.tostring(r_now, "+#.##") + "R")
+                label.new(bar_index, tp_v, "✓ +" + str.tostring(i_target_r, "#.#") + "R",
+                         style=label.style_label_left,
+                         color=color.new(color.green, 0), textcolor=color.white,
+                         size=size.tiny)
 
-// ─── Yeni sinyal: kayit + cizgi/etiket olustur ─────────────────────────────
+// ─── Yeni sinyal: tum gorsel objeleri SABIT olarak olustur ─────────────────
 
 push_new_signal(bool is_long_, float entry, float sl_v, float tp_v) =>
     color_l = is_long_ ? color.green : color.red
     marker_y = is_long_ ? low : high
     marker_style = is_long_ ? label.style_label_up : label.style_label_down
     marker_text = is_long_ ? "TS L" : "TS S"
+
+    // Marker: bar uzerine ankor, hareket etmez
     marker = label.new(bar_index, marker_y, marker_text,
                        style=marker_style, color=color.new(color_l, 0),
                        textcolor=color.white, size=size.tiny)
+
     if i_show_levels
+        // Cizgiler: sinyal barindan baslar, saga uzar (extend.right)
         le = line.new(bar_index, entry, bar_index, entry, color=color.new(color.yellow, 0), width=2)
         ls = line.new(bar_index, sl_v,  bar_index, sl_v,  color=color.new(color.red, 0),    width=1, style=line.style_dashed)
         lt = line.new(bar_index, tp_v,  bar_index, tp_v,  color=color.new(color.green, 0),  width=1, style=line.style_dashed)
-        lab = label.new(bar_index, tp_v, "0.00R",
-                       style=label.style_label_left, color=color.new(color.yellow, 60),
-                       textcolor=color.white, size=size.tiny)
+
+        // Etiketler: sinyal barina SABIT, oradaki Y'da
+        lab_e = label.new(bar_index, entry, "E " + str.tostring(entry, format.mintick),
+                         style=label.style_label_right, color=color.new(color.yellow, 70),
+                         textcolor=color.yellow, size=size.tiny)
+        lab_s = label.new(bar_index, sl_v, "SL " + str.tostring(sl_v, format.mintick),
+                         style=label.style_label_right, color=color.new(color.red, 70),
+                         textcolor=color.red, size=size.tiny)
+        lab_t = label.new(bar_index, tp_v, "TP " + str.tostring(tp_v, format.mintick) + " (" + str.tostring(i_target_r, "#.#") + "R)",
+                         style=label.style_label_right, color=color.new(color.green, 70),
+                         textcolor=color.green, size=size.tiny)
+
         array.push(sig_bar, bar_index)
         array.push(sig_is_long, is_long_)
         array.push(sig_entry, entry)
@@ -190,10 +191,11 @@ push_new_signal(bool is_long_, float entry, float sl_v, float tp_v) =>
         array.push(sig_le, le)
         array.push(sig_ls, ls)
         array.push(sig_lt, lt)
-        array.push(sig_lab, lab)
+        array.push(sig_lab_e, lab_e)
+        array.push(sig_lab_s, lab_s)
+        array.push(sig_lab_t, lab_t)
         array.push(sig_marker, marker)
 
-        // FIFO
         while array.size(sig_entry) > i_max_visible
             delete_signal(0)
 
