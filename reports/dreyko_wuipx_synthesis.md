@@ -389,3 +389,51 @@ Wuipx'in tezi sayısal kanıt buldu:
 - **FVG mıknatıs etkisi** (FVG tek başına zayıf ama valuable filter)
 - **MMXM (range targeting)** = setup'ı strüktüre ediyor
 - **İki kombinasyon = signature edge** — sektör ortalamasının çok üstü
+
+---
+
+## 12. Walk-forward validation — overfitting kontrolü
+
+**Metodoloji:** Train (9 ay: May 2025 → Şub 2026) periyodunda grid search ile
+optimal parametre, Test (3 ay: Şub → May 2026) periyodunda aynı parametrelerle
+backtest. Hiç re-tune yok.
+
+### Sonuçlar — IS vs OOS
+
+| Sembol | Strateji | IS R/sig | OOS R/sig | Δ% | Yorum |
+|---|---|---|---|---|---|
+| BTC | TurtleSoup | +0.91 | **-0.05** | **-105%** | Tam ters dönüş |
+| BTC | MMXM | +0.98 | +0.49 | -50% | En robust kombinasyon |
+| ETH | TurtleSoup | +0.86 | +0.49 | -43% | Orta — hala kazançlı |
+| ETH | MMXM | +1.17 | +0.23 | -80% | Ciddi |
+| XRP | TurtleSoup | +1.11 | +0.33 | -71% | Ciddi |
+| XRP | MMXM | +0.97 | +0.21 | -78% | Ciddi |
+
+### Gerçeklik kontrolü
+
+**IS sonuçlar 4-5x abartılı.** Grid search train periyodunda öyle bir setup
+buluyor ki out-of-sample %50-80 düşüyor.
+
+| | IS sonuç | OOS gerçek | Hangisi doğru? |
+|---|---|---|---|
+| MMXM ∩ FVG | R/sig +1.51 | (1 sembol BTC MMXM OOS +0.49 ≈ baseline) | OOS bazlı tahmin: ~+0.5-0.8 |
+| TurtleSoup HTF | R/sig +0.42 | OOS ortalama +0.26 | Düşük ama hala pozitif |
+
+### Pozitif yan
+
+- **OOS'lerin çoğu hâlâ pozitif** (BTC TS hariç) → gerçek bir edge var
+- **BTC MMXM** OOS'de en sağlam (PF 1.55) → robust strateji
+- **ETH TS** OOS'de PF 1.60 → TS metodu da çalışıyor, sadece optimum farklı
+
+### Train'de seçilen parametreler tutarlı
+
+Tüm sembollerde TS optimal: `lookback=10, sweep=0.0005, target_r=5.0` →
+parametre seçimi rastgele değil, gerçek bir pattern var. Rejim değişimi
+en olası açıklama (not strict overfitting).
+
+### Öneriler
+
+1. **Daha küçük grid** (12-16 kombinasyon yerine 72) — overfitting riski azalır
+2. **Continuous walk-forward** — her ay re-tune, bir önceki ayın paramıyla trade
+3. **Ensemble params** — top 5 paramın medianı veya çoklu çalıştırma
+4. **Sadece OOS-tested setuplara güven** — "best" değil "robust" tercih edilmeli
