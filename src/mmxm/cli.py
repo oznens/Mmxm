@@ -265,7 +265,18 @@ def scan_strategy(
         raise typer.BadParameter(f"OHLCV boş: {symbol} {timeframe}")
     logger.info("OHLCV {} bar", len(ohlcv))
 
-    strategy = get_strategy(strategy_name, lookback=lookback, target_r=target_r)
+    # Sadece strategy'nin __init__'inde olan parametreleri geç
+    import inspect
+
+    from mmxm.strategies import REGISTRY
+    strat_class = REGISTRY[strategy_name]
+    init_params = set(inspect.signature(strat_class.__init__).parameters)
+    kwargs = {}
+    if "lookback" in init_params:
+        kwargs["lookback"] = lookback
+    if "target_r" in init_params:
+        kwargs["target_r"] = target_r
+    strategy = get_strategy(strategy_name, **kwargs)
     signals = strategy.scan(symbol, ohlcv)
     logger.info("sinyal sayısı: {}", len(signals))
 
@@ -340,6 +351,92 @@ def backtest(
                         s, stats["n"], stats["n_closed"], stats["win_rate"], stats["total_r"])
     logger.info("Detay → {}", out_results)
     logger.info("Özet  → {}", out_summary)
+
+
+@app.command("tune-strategy")
+def tune_strategy(
+    strategy_name: str = typer.Argument(..., help="turtle_soup | fvg_retest"),
+    symbol: str = typer.Option(..., "--symbol"),
+    timeframe: str = typer.Option("1h", "--tf"),
+    since: Optional[datetime] = typer.Option(None, "--since"),
+    until: Optional[datetime] = typer.Option(None, "--until"),
+    exchange: str = typer.Option("yahoo", "--exchange"),
+    rank_by: str = typer.Option("total_r", "--rank", help="total_r | profit_factor | win_rate"),
+    top_n: int = typer.Option(10, "--top", help="rapor: en iyi N kombinasyon"),
+    out: Path = typer.Option(Path("reports/tuning.json"), "--out"),
+    max_hold_days: int = typer.Option(30, "--max-hold-days"),
+    min_signals: int = typer.Option(20, "--min-signals", help="bu sayının altındaki konfigürasyonları ele"),
+) -> None:
+    """Strateji parametre grid search."""
+    import json as _json
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+
+    from mmxm.backtest.data import fetch_ohlcv
+    from mmxm.strategies import REGISTRY
+    from mmxm.strategies.tuning import grid_search
+
+    if since is None:
+        since = _dt(2024, 1, 1, tzinfo=_tz.utc)
+    if until is None:
+        until = _dt.now(_tz.utc)
+    if strategy_name not in REGISTRY:
+        raise typer.BadParameter(f"strateji bilinmiyor: {strategy_name}")
+
+    logger.info("OHLCV yükleniyor {} {} ...", symbol, timeframe)
+    ohlcv = fetch_ohlcv(symbol, timeframe, since=since, until=until, exchange_id=exchange)
+    if ohlcv.empty:
+        raise typer.BadParameter(f"OHLCV boş: {symbol} {timeframe}")
+
+    # Strategy-spesifik grid
+    grids = {
+        "turtle_soup": {
+            "lookback": [10, 15, 20, 30, 50],
+            "sweep_min_pct": [0.0005, 0.001, 0.002, 0.005, 0.01],
+            "target_r": [1.5, 2.0, 3.0, 5.0],
+            "debounce_bars": [5, 10, 20],
+        },
+        "fvg_retest": {
+            "min_fvg_size_pct": [0.002, 0.005, 0.01, 0.02],
+            "max_age_bars": [20, 50, 100],
+            "target_r": [1.5, 2.0, 3.0, 5.0],
+            "debounce_bars": [5, 10, 20],
+        },
+    }
+    grid = grids[strategy_name]
+    strat_class = REGISTRY[strategy_name]
+
+    results = grid_search(
+        strat_class, grid, symbol, ohlcv,
+        max_hold_days=max_hold_days, rank_by=rank_by, min_signals=min_signals,
+    )
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        _json.dumps(
+            [{"params": g.params, "n_signals": g.n_signals,
+              "summary": g.summary.model_dump(mode="json")} for g in results[:top_n]],
+            ensure_ascii=False, indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    logger.info("=" * 60)
+    logger.info("GRID SEARCH SONUÇ (rank: {})", rank_by)
+    logger.info("=" * 60)
+    logger.info("Toplam değerlendirilen: {} / {} (min_signals filtresi sonrası)",
+                len(results), len(list(__import__('itertools').product(*grid.values()))))
+    logger.info("")
+    logger.info("{:<3} {:<48} {:>6}  {:>5}  {:>7}  {:>5}  {:>5}",
+                "#", "PARAMS", "N", "WR%", "TOTAL", "PF", "MDD")
+    logger.info("-" * 90)
+    for i, g in enumerate(results[:top_n], 1):
+        params_str = ", ".join(f"{k}={v}" for k, v in g.params.items())[:47]
+        logger.info("{:<3} {:<48} {:>6}  {:>4.0%}  {:>+7.2f}  {:>5.2f}  {:>5.1f}",
+                    i, params_str, g.n_signals,
+                    g.summary.win_rate, g.summary.total_r,
+                    g.summary.profit_factor, g.summary.max_drawdown_r)
+    logger.info("Detay → {}", out)
 
 
 @app.command()
