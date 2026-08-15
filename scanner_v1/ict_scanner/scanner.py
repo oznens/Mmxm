@@ -12,6 +12,7 @@ from .bybit import BybitMarket
 from .charting import render_setup_chart
 from .ict import analyze_symbol
 from .outcomes import OutcomeTracker
+from .paper import PaperPortfolio
 from .state_store import SetupStore
 
 TIMEFRAMES = {"240": 220, "60": 300, "15": 1000, "5": 500}
@@ -24,44 +25,28 @@ def telegram(text: str, photo: Path | None = None) -> None:
         return
     if photo is not None and photo.exists():
         with photo.open("rb") as f:
-            requests.post(
-                f"https://api.telegram.org/bot{token}/sendPhoto",
-                data={"chat_id": chat_id, "caption": text[:1024]},
-                files={"photo": f},
-                timeout=30,
-            ).raise_for_status()
+            requests.post(f"https://api.telegram.org/bot{token}/sendPhoto", data={"chat_id": chat_id, "caption": text[:1024]}, files={"photo": f}, timeout=30).raise_for_status()
         if len(text) > 1024:
-            requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": text[1024:]},
-                timeout=15,
-            ).raise_for_status()
+            requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": text[1024:]}, timeout=15).raise_for_status()
         return
-    requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": text},
-        timeout=15,
-    ).raise_for_status()
+    requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=15).raise_for_status()
 
 
 def _fmt(x: float | None) -> str:
     return "-" if x is None else f"{x:.8g}"
 
 
-def _alert(signal) -> str:
+def _alert(signal, paper: PaperPortfolio) -> str:
+    risk = paper.risk_amount()
     return (
         f"{signal.grade} ICT {signal.direction} | {signal.symbol}\n"
         f"State: {signal.state} | Score: {signal.score}/100\n"
         f"4H: {signal.htf_bias} | MMXM: {signal.mmxm} | PD: {signal.pd_zone}\n"
         f"Raid: {signal.raid_name or '-'} @{_fmt(signal.raid_level)} | SMT: {signal.smt}\n"
         f"MSS: {signal.mss} | CISD: {signal.cisd} | DISP: {signal.displacement} ({signal.displacement_ratio})\n"
-        f"FVG: {signal.fvg} | IFVG: {signal.ifvg} | OB: {signal.order_block}\n"
-        f"Entry: {_fmt(signal.entry_low)} - {_fmt(signal.entry_high)}\n"
-        f"SL: {_fmt(signal.stop)}\n"
-        f"TP1: {_fmt(signal.tp1)} ({signal.rr_tp1}R)\n"
-        f"TP2: {_fmt(signal.tp2)} ({signal.rr_tp2}R)\n"
-        f"TP3: {_fmt(signal.tp3)} ({signal.rr_tp3}R)\n"
-        f"Draw: {signal.draw_name or '-'} | Invalidation: {signal.invalidation or '-'}"
+        f"Entry: {_fmt(signal.entry_low)} - {_fmt(signal.entry_high)}\nSL: {_fmt(signal.stop)}\n"
+        f"TP1: {_fmt(signal.tp1)} ({signal.rr_tp1}R) | TP2: {_fmt(signal.tp2)} ({signal.rr_tp2}R) | TP3: {_fmt(signal.tp3)} ({signal.rr_tp3}R)\n"
+        f"Paper Equity: {paper.equity():.2f} USDT | Next Risk: {risk:.2f} USDT (%{paper.risk_pct*100:g})"
     )
 
 
@@ -73,21 +58,24 @@ def scan() -> list[dict]:
     charts_enabled = os.getenv("CHARTS_ENABLED", "true").lower() in {"1", "true", "yes"}
     state_db = os.getenv("STATE_DB", "data/setups.db")
     chart_dir = os.getenv("CHART_DIR", "data/charts")
+    paper_start = float(os.getenv("PAPER_START_BALANCE", "1000"))
+    paper_risk = float(os.getenv("PAPER_RISK_PCT", "0.01"))
 
     market = BybitMarket(testnet=False)
     symbols = market.top_symbols(top_n)
-
     btc15 = market.klines("BTCUSDT", "15", TIMEFRAMES["15"])
     eth15 = market.klines("ETHUSDT", "15", TIMEFRAMES["15"])
 
     store = SetupStore(state_db)
     outcomes = OutcomeTracker(state_db)
+    paper = PaperPortfolio(state_db, paper_start, paper_risk)
     results = []
     try:
         for symbol in symbols:
             try:
                 frames = {tf: market.klines(symbol, tf, lim) for tf, lim in TIMEFRAMES.items()}
                 outcomes.update_symbol(symbol, frames["5"])
+                paper.update_symbol(symbol, frames["5"])
 
                 benchmark = {"15": eth15 if symbol == "BTCUSDT" else btc15}
                 signal = analyze_symbol(symbol, frames, benchmark)
@@ -95,22 +83,23 @@ def scan() -> list[dict]:
                 results.append(payload)
                 changed = store.upsert(payload)
                 outcomes.register(payload)
+                paper.register(payload)
 
                 should_alert = signal.score >= min_score and signal.direction != "NONE"
                 if alert_on_change_only:
                     should_alert = should_alert and changed
                 if should_alert:
                     photo = render_setup_chart(symbol, frames, signal, chart_dir) if charts_enabled else None
-                    telegram(_alert(signal), photo)
+                    telegram(_alert(signal, paper), photo)
             except Exception as exc:
                 results.append({"symbol": symbol, "error": str(exc)})
     finally:
-        summary = outcomes.summary()
-        outcomes.close()
-        store.close()
+        outcome_summary = outcomes.summary()
+        paper_summary = paper.snapshot()
+        outcomes.close(); paper.close(); store.close()
 
     results.sort(key=lambda x: x.get("score", -1), reverse=True)
     Path("data").mkdir(exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    Path(f"data/scan_{stamp}.json").write_text(json.dumps({"outcomes": summary, "setups": results}, indent=2), encoding="utf-8")
+    Path(f"data/scan_{stamp}.json").write_text(json.dumps({"paper": paper_summary, "outcomes": outcome_summary, "setups": results}, indent=2), encoding="utf-8")
     return results
