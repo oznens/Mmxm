@@ -1,0 +1,28 @@
+name: scanner-v1-tests
+
+on:
+  pull_request:
+    paths:
+      - 'scanner_v1/**'
+      - '.github/workflows/scanner-v1-tests.yml'
+  push:
+    paths:
+      - 'scanner_v1/**'
+      - '.github/workflows/scanner-v1-tests.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scanner_v1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: scanner_v1/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: python -m compileall -q ict_scanner tests
+      - run: pytest -q
