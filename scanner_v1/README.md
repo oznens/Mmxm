@@ -114,10 +114,10 @@ Entry bölgesi FVG/IFVG/OB ile bulunur; OTE ile kesişim varsa kesişim tercih e
 ## Test
 
 ```bash
-pytest -q
+python -m pytest -q
 ```
 
-V2 testleri bir shell/CI checkout'unda çalıştırılmalıdır. Bu branch GitHub connector üzerinden yazıldığı için bu oturumda test sonucu doğrulanmış sayılmamalıdır.
+GitHub Actions aynı komutu ve ayrıca `python -m compileall -q ict_scanner tests` kontrolünü her scanner değişikliğinde çalıştırır.
 
 ## Sonraki geliştirmeler
 
