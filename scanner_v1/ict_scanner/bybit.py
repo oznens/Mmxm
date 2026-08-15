@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pandas as pd
 from pybit.unified_trading import HTTP
@@ -9,6 +9,7 @@ from pybit.unified_trading import HTTP
 @dataclass(slots=True)
 class BybitMarket:
     testnet: bool = False
+    http: HTTP = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.http = HTTP(testnet=self.testnet)
