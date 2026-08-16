@@ -1,0 +1,9 @@
+pybit>=5.11.0
+pandas>=2.2.0
+numpy>=1.26.0
+matplotlib>=3.9.0
+python-dotenv>=1.0.1
+requests>=2.32.0
+fastapi>=0.116.0
+uvicorn>=0.35.0
+pytest>=8.0.0
