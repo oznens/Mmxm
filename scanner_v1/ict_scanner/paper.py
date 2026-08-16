@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,9 @@ class PaperPortfolio:
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.starting_balance = float(starting_balance)
         self.risk_pct = float(risk_pct)
+        self.min_score = int(os.getenv("PAPER_MIN_SCORE", "75"))
+        self.max_open = int(os.getenv("PAPER_MAX_OPEN", "5"))
+        self.allowed_grades = {x.strip() for x in os.getenv("PAPER_ALLOWED_GRADES", "A,A+").split(",") if x.strip()}
         self.db.execute("CREATE TABLE IF NOT EXISTS paper_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self.db.execute('''CREATE TABLE IF NOT EXISTS paper_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,19 +68,45 @@ class PaperPortfolio:
     def risk_amount(self) -> float:
         return round(self.equity() * self.risk_pct, 8)
 
-    def register(self, signal: dict, opened_at: str | None = None) -> int | None:
+    def _eligible(self, signal: dict) -> bool:
         if signal.get("state") != "ENTRY_READY" or signal.get("direction") not in {"LONG", "SHORT"}:
+            return False
+        if int(signal.get("score", 0)) < self.min_score:
+            return False
+        if str(signal.get("grade", "")) not in self.allowed_grades:
+            return False
+        if signal.get("mmxm") in {None, "", "NONE"}:
+            return False
+        if not signal.get("mss") or not signal.get("cisd") or not signal.get("displacement"):
+            return False
+        if not (signal.get("fvg") or signal.get("ifvg")):
+            return False
+        if not signal.get("raid_name"):
+            return False
+        return True
+
+    def register(self, signal: dict, opened_at: str | None = None) -> int | None:
+        if not self._eligible(signal):
             return None
         lo, hi, stop = signal.get("entry_low"), signal.get("entry_high"), signal.get("stop")
-        if lo is None or hi is None or stop is None:
+        tp1, tp2, tp3 = signal.get("tp1"), signal.get("tp2"), signal.get("tp3")
+        if None in (lo, hi, stop, tp1, tp2, tp3):
             return None
         entry = (float(lo) + float(hi)) / 2
-        stop = float(stop)
+        stop, tp1, tp2, tp3 = map(float, (stop, tp1, tp2, tp3))
+        direction = signal["direction"]
+        if direction == "LONG":
+            if not (stop < entry < tp1 < tp2 < tp3):
+                return None
+        else:
+            if not (stop > entry > tp1 > tp2 > tp3):
+                return None
+        if self.db.execute("SELECT COUNT(*) FROM paper_trades WHERE status='OPEN'").fetchone()[0] >= self.max_open:
+            return None
+        if self.db.execute("SELECT 1 FROM paper_trades WHERE symbol=? AND status='OPEN' LIMIT 1", (signal["symbol"],)).fetchone():
+            return None
         per_unit_risk = abs(entry - stop)
         if per_unit_risk <= 0:
-            return None
-        active = self.db.execute("SELECT id FROM paper_trades WHERE symbol=? AND status='OPEN' LIMIT 1", (signal["symbol"],)).fetchone()
-        if active:
             return None
         risk_usdt = self.risk_amount()
         qty = risk_usdt / per_unit_risk
@@ -84,8 +114,8 @@ class PaperPortfolio:
         cur = self.db.execute('''INSERT OR IGNORE INTO paper_trades
             (symbol,direction,grade,score,opened_at,entry,stop,tp1,tp2,tp3,qty,risk_usdt,status,signal_json)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'OPEN',?)''',
-            (signal["symbol"], signal["direction"], signal.get("grade"), int(signal.get("score",0)), now,
-             entry, stop, signal.get("tp1"), signal.get("tp2"), signal.get("tp3"), qty, risk_usdt,
+            (signal["symbol"], direction, signal.get("grade"), int(signal.get("score",0)), now,
+             entry, stop, tp1, tp2, tp3, qty, risk_usdt,
              json.dumps(signal, default=str, separators=(",", ":"))))
         self.db.commit()
         return cur.lastrowid if cur.rowcount else None
@@ -94,8 +124,6 @@ class PaperPortfolio:
         if df5.empty:
             return
         rows = self.db.execute("SELECT id,direction,entry,stop,tp1,tp2,tp3,qty,risk_usdt FROM paper_trades WHERE symbol=? AND status='OPEN'", (symbol,)).fetchall()
-        if not rows:
-            return
         high, low = float(df5.high.iloc[-1]), float(df5.low.iloc[-1])
         for tid, direction, entry, stop, tp1, tp2, tp3, qty, risk_usdt in rows:
             exit_price = reason = None
@@ -114,9 +142,7 @@ class PaperPortfolio:
             pnl = (exit_price - entry) * qty if direction == "LONG" else (entry - exit_price) * qty
             r_mult = pnl / risk_usdt if risk_usdt else 0.0
             now = self._now()
-            self.db.execute("UPDATE paper_trades SET status='CLOSED',closed_at=?,close_reason=?,exit_price=?,pnl_usdt=?,r_multiple=? WHERE id=?",
-                            (now, reason, exit_price, pnl, r_mult, tid))
-            self.db.commit()
+            self.db.execute("UPDATE paper_trades SET status='CLOSED',closed_at=?,close_reason=?,exit_price=?,pnl_usdt=?,r_multiple=? WHERE id=?", (now, reason, exit_price, pnl, r_mult, tid))
             self.db.execute("INSERT INTO equity_history(ts,equity,event,trade_id) VALUES (?,?,?,?)", (now, self.equity(), reason, tid))
             self.db.commit()
 
@@ -127,10 +153,7 @@ class PaperPortfolio:
         wins = self.db.execute("SELECT COUNT(*) FROM paper_trades WHERE status='CLOSED' AND pnl_usdt>0").fetchone()[0]
         losses = self.db.execute("SELECT COUNT(*) FROM paper_trades WHERE status='CLOSED' AND pnl_usdt<0").fetchone()[0]
         pnl = equity - self.starting_balance
-        return {"starting_balance": self.starting_balance, "equity": equity, "pnl_usdt": round(pnl,8),
-                "return_pct": round(pnl/self.starting_balance*100,4), "risk_pct": self.risk_pct*100,
-                "next_risk_usdt": self.risk_amount(), "open_trades": int(open_count), "closed_trades": int(closed),
-                "wins": int(wins), "losses": int(losses), "win_rate": round(wins/closed*100,2) if closed else None}
+        return {"starting_balance": self.starting_balance, "equity": equity, "pnl_usdt": round(pnl,8), "return_pct": round(pnl/self.starting_balance*100,4), "risk_pct": self.risk_pct*100, "next_risk_usdt": self.risk_amount(), "open_trades": int(open_count), "closed_trades": int(closed), "wins": int(wins), "losses": int(losses), "win_rate": round(wins/closed*100,2) if closed else None}
 
     def trades(self, limit: int = 200) -> list[dict]:
         cur = self.db.execute("SELECT id,symbol,direction,grade,score,opened_at,closed_at,entry,stop,tp1,tp2,tp3,qty,risk_usdt,status,close_reason,exit_price,pnl_usdt,r_multiple FROM paper_trades ORDER BY id DESC LIMIT ?", (limit,))
